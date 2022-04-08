@@ -42,8 +42,10 @@ def visualizeRegistration(net, image_A, image_B, N, path):
     ax.axes.xaxis.set_ticks([])
     ax.axes.yaxis.set_ticks([])
     plt.title("Image B Warped")
-    plt.imshow(net.warped_image_B.detach().cpu()[N, 0])
-    show_as_grid(net.phi_AB_vectorfield[N])
+    phi_vectorfield_n = net.phi_AB_vectorfield[N]
+    extent = [-0.5,phi_vectorfield_n.size()[-2] - 0.5,phi_vectorfield_n.size()[-1] - 0.5,-0.5]
+    plt.imshow(net.warped_image_B.detach().cpu()[N, 0],extent=extent,aspect='auto')
+    show_as_grid(phi_vectorfield_n)
     plt.subplot(3, 2, 3)
     ax = plt.gca()
     ax.axes.xaxis.set_ticks([])
@@ -88,5 +90,7 @@ def visualizeRegistrationCompact(net, image_A, image_B, N):
     ax.axes.xaxis.set_ticks([])
     ax.axes.yaxis.set_ticks([])
     # plt.title("Image B Warped")
-    plt.imshow(net.warped_image_B.detach().cpu()[N, 0])
-    show_as_grid(net.phi_AB_vectorfield[N])
+    phi_vectorfield_n = net.phi_AB_vectorfield[N]
+    extent = [-0.5,phi_vectorfield_n.size()[-2] - 0.5,phi_vectorfield_n.size()[-1] - 0.5,-0.5]
+    plt.imshow(net.warped_image_B.detach().cpu()[N, 0],extent=extent,aspect='auto')
+    show_as_grid(phi_vectorfield_n)
