@@ -153,7 +153,7 @@ class GradientICON(network_wrappers.RegistrationModule):
             dy = torch.Tensor([[[[[0.0]]], [[[delta]]], [[[0.0]]]]]).to(
                 self.identity_map.device
             )
-            dz = torch.Tensor([[[[0.0]]], [[[0.0]]], [[[delta]]]]).to(
+            dz = torch.Tensor([[[[[0.0]]], [[[0.0]]], [[[delta]]]]]).to(
                 self.identity_map.device
             )
             direction_vectors = (dx, dy, dz)
