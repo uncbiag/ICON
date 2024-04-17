@@ -3,7 +3,7 @@ import unittest
 class TestConstricont(unittest.TestCase):
     def test_2d_inverse_consistent_train(self):
     
-
+        import icon_registration
         import icon_registration.data as data
         import icon_registration.networks as networks
         from icon_registration import constricon
@@ -50,5 +50,5 @@ class TestConstricont(unittest.TestCase):
 
         # Test that folds are rare enough
         self.assertLess(np.mean(np.exp(np.array(y)[-5:, 3] - 0.1)), 2)
-        for l in y:
+        for l in y[:-3]:
             print(l)
