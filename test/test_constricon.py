@@ -32,7 +32,7 @@ class TestConstricont(unittest.TestCase):
         print("ConstrICON training")
         net = constricon.VelocityFieldDiffusion(
             constricon.FirstTransform(
-                constricon.TwoStepConsistent(
+                constricon.TwoStepInverseConsistent(
                     constricon.ConsistentFromMatrix(
                         networks.ConvolutionalMatrixNet(dimension=2)
                     ), 
