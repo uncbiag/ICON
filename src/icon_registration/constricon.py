@@ -35,7 +35,7 @@ class VelocityFieldBendingEnergyNet(losses.BendingEnergyNet):
         fields = list(find_velocity_fields(self.phi_AB))
 
         return sum(
-            icon.losses.BendingEnergyNet.compute_bending_energy_loss(self, field)
+            losses.BendingEnergyNet.compute_bending_energy_loss(self, field)
             for field in fields
         )
 
@@ -45,7 +45,7 @@ class VelocityFieldDiffusion(losses.DiffusionRegularizedNet):
         fields = list(find_velocity_fields(self.phi_AB))
 
         return sum(
-            icon.losses.DiffusionRegularizedNet.compute_bending_energy_loss(
+            losses.DiffusionRegularizedNet.compute_bending_energy_loss(
                 self, field + self.identity_map
             )
             for field in fields
@@ -220,7 +220,7 @@ class ConsistentFromMatrix(RegistrationModule):
                 ],
                 axis=1,
             )
-            return icon.network_wrappers.multiply_matrix_vectorfield(
+            return network_wrappers.multiply_matrix_vectorfield(
                 matrix_phi, coordinates_homogeneous
             )[:, :-1]
 
@@ -234,7 +234,7 @@ class ConsistentFromMatrix(RegistrationModule):
                 ],
                 axis=1,
             )
-            return icon.network_wrappers.multiply_matrix_vectorfield(
+            return network_wrappers.multiply_matrix_vectorfield(
                 matrix_phi_BA, coordinates_homogeneous
             )[:, :-1]
 
@@ -270,7 +270,7 @@ class ExponentialMatrix(RegistrationModule):
                 ],
                 axis=1,
             )
-            return icon.network_wrappers.multiply_matrix_vectorfield(
+            return network_wrappers.multiply_matrix_vectorfield(
                 matrix_phi, coordinates_homogeneous
             )[:, :-1]
 
@@ -284,7 +284,7 @@ class ExponentialMatrix(RegistrationModule):
                 ],
                 axis=1,
             )
-            return icon.network_wrappers.multiply_matrix_vectorfield(
+            return network_wrappers.multiply_matrix_vectorfield(
                 matrix_phi_BA, coordinates_homogeneous
             )[:, :-1]
 
