@@ -20,129 +20,138 @@ def finetune_execute(model, image_A, image_B, steps):
         optimizer.step()
     with torch.no_grad():
         loss = model(image_A, image_B)
-    model.load_state_dict(state_dict)
-    return loss
+    def cleanup():
+        model.load_state_dict(state_dict)
+    return loss, cleanup
 
 
 def register_pair(
     model, image_A, image_B, finetune_steps=None, return_artifacts=False
 ) -> "(itk.CompositeTransform, itk.CompositeTransform)":
 
-    assert isinstance(image_A, itk.Image)
-    assert isinstance(image_B, itk.Image)
+    try:
 
-    # send model to cpu or gpu depending on config- auto detects capability
-    model.to(config.device)
-
-    A_npy = np.array(image_A)
-    B_npy = np.array(image_B)
-
-    assert(np.max(A_npy) != np.min(A_npy))
-    assert(np.max(B_npy) != np.min(B_npy))
-    # turn images into torch Tensors: add feature and batch dimensions (each of length 1)
-    A_trch = torch.Tensor(A_npy).to(config.device)[None, None]
-    B_trch = torch.Tensor(B_npy).to(config.device)[None, None]
-
-    shape = model.identity_map.shape
-
-    # Here we resize the input images to the shape expected by the neural network. This affects the
-    # pixel stride as well as the magnitude of the displacement vectors of the resulting
-    # displacement field, which create_itk_transform will have to compensate for.
-    A_resized = F.interpolate(
-        A_trch, size=shape[2:], mode="trilinear", align_corners=False
-    )
-    B_resized = F.interpolate(
-        B_trch, size=shape[2:], mode="trilinear", align_corners=False
-    )
-    if finetune_steps == 0:
-        raise Exception("To indicate no finetune_steps, pass finetune_steps=None")
-
-    if finetune_steps == None:
-        with torch.no_grad():
-            loss = model(A_resized, B_resized)
-    else:
-        loss = finetune_execute(model, A_resized, B_resized, finetune_steps)
-
-    # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
-    # maps computed by the model
-    if hasattr(model, "prepare_for_viz"):
-        with torch.no_grad():
-            model.prepare_for_viz(A_resized, B_resized)
-    phi_AB = model.phi_AB(model.identity_map)
-    phi_BA = model.phi_BA(model.identity_map)
-
-    # the parameters ident, image_A, and image_B are used for their metadata
-    itk_transforms = (
-        create_itk_transform(phi_AB, model.identity_map, image_A, image_B),
-        create_itk_transform(phi_BA, model.identity_map, image_B, image_A),
-    )
-    if not return_artifacts:
-        return itk_transforms
-    else:
-        return itk_transforms + (to_floats(loss),)
+        assert isinstance(image_A, itk.Image)
+        assert isinstance(image_B, itk.Image)
+    
+        # send model to cpu or gpu depending on config- auto detects capability
+        model.to(config.device)
+    
+        A_npy = np.array(image_A)
+        B_npy = np.array(image_B)
+    
+        assert(np.max(A_npy) != np.min(A_npy))
+        assert(np.max(B_npy) != np.min(B_npy))
+        # turn images into torch Tensors: add feature and batch dimensions (each of length 1)
+        A_trch = torch.Tensor(A_npy).to(config.device)[None, None]
+        B_trch = torch.Tensor(B_npy).to(config.device)[None, None]
+    
+        shape = model.identity_map.shape
+    
+        # Here we resize the input images to the shape expected by the neural network. This affects the
+        # pixel stride as well as the magnitude of the displacement vectors of the resulting
+        # displacement field, which create_itk_transform will have to compensate for.
+        A_resized = F.interpolate(
+            A_trch, size=shape[2:], mode="trilinear", align_corners=False
+        )
+        B_resized = F.interpolate(
+            B_trch, size=shape[2:], mode="trilinear", align_corners=False
+        )
+        if finetune_steps == 0:
+            raise Exception("To indicate no finetune_steps, pass finetune_steps=None")
+    
+        if finetune_steps == None:
+            with torch.no_grad():
+                loss = model(A_resized, B_resized)
+                cleanup = lambda: None
+        else:
+            loss, cleanup = finetune_execute(model, A_resized, B_resized, finetune_steps)
+    
+        # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
+        # maps computed by the model
+        if hasattr(model, "prepare_for_viz"):
+            with torch.no_grad():
+                model.prepare_for_viz(A_resized, B_resized)
+        phi_AB = model.phi_AB(model.identity_map)
+        phi_BA = model.phi_BA(model.identity_map)
+    
+        # the parameters ident, image_A, and image_B are used for their metadata
+        itk_transforms = (
+            create_itk_transform(phi_AB, model.identity_map, image_A, image_B),
+            create_itk_transform(phi_BA, model.identity_map, image_B, image_A),
+        )
+        if not return_artifacts:
+            return itk_transforms
+        else:
+            return itk_transforms + (to_floats(loss),)
+    finally:
+        cleanup()
 
 def register_pair_with_multimodalities(
     model, image_A: list, image_B: list, finetune_steps=None, return_artifacts=False
 ) -> "(itk.CompositeTransform, itk.CompositeTransform)":
-
-    assert len(image_A) == len(image_B), "image_A and image_B should have the same number of modalities."
-
-    # send model to cpu or gpu depending on config- auto detects capability
-    model.to(config.device)
-
-    A_npy, B_npy = [], []
-    for image_a, image_b in zip(image_A, image_B):
-        assert isinstance(image_a, itk.Image)
-        assert isinstance(image_b, itk.Image)
-
-        A_npy.append(np.array(image_a))
-        B_npy.append(np.array(image_b))
-
-        assert(np.max(A_npy[-1]) != np.min(A_npy[-1]))
-        assert(np.max(B_npy[-1]) != np.min(B_npy[-1]))
-
-    # turn images into torch Tensors: add batch dimensions (each of length 1)
-    A_trch = torch.Tensor(np.array(A_npy)).to(config.device)[None]
-    B_trch = torch.Tensor(np.array(B_npy)).to(config.device)[None]
-
-    shape = model.identity_map.shape[2:]
-    if list(A_trch.shape[2:]) != list(shape) or (list(B_trch.shape[2:]) != list(shape)):
-        # Here we resize the input images to the shape expected by the neural network. This affects the
-        # pixel stride as well as the magnitude of the displacement vectors of the resulting
-        # displacement field, which create_itk_transform will have to compensate for.
-        A_trch = F.interpolate(
-            A_trch, size=shape, mode="trilinear", align_corners=False
+    try:
+        assert len(image_A) == len(image_B), "image_A and image_B should have the same number of modalities."
+    
+        # send model to cpu or gpu depending on config- auto detects capability
+        model.to(config.device)
+    
+        A_npy, B_npy = [], []
+        for image_a, image_b in zip(image_A, image_B):
+            assert isinstance(image_a, itk.Image)
+            assert isinstance(image_b, itk.Image)
+    
+            A_npy.append(np.array(image_a))
+            B_npy.append(np.array(image_b))
+    
+            assert(np.max(A_npy[-1]) != np.min(A_npy[-1]))
+            assert(np.max(B_npy[-1]) != np.min(B_npy[-1]))
+    
+        # turn images into torch Tensors: add batch dimensions (each of length 1)
+        A_trch = torch.Tensor(np.array(A_npy)).to(config.device)[None]
+        B_trch = torch.Tensor(np.array(B_npy)).to(config.device)[None]
+    
+        shape = model.identity_map.shape[2:]
+        if list(A_trch.shape[2:]) != list(shape) or (list(B_trch.shape[2:]) != list(shape)):
+            # Here we resize the input images to the shape expected by the neural network. This affects the
+            # pixel stride as well as the magnitude of the displacement vectors of the resulting
+            # displacement field, which create_itk_transform will have to compensate for.
+            A_trch = F.interpolate(
+                A_trch, size=shape, mode="trilinear", align_corners=False
+            )
+            B_trch = F.interpolate(
+                B_trch, size=shape, mode="trilinear", align_corners=False
+            )
+    
+        if finetune_steps == 0:
+            raise Exception("To indicate no finetune_steps, pass finetune_steps=None")
+    
+        if finetune_steps == None:
+            with torch.no_grad():
+                loss = model(A_trch, B_trch)
+            cleanup = lambda: None
+        else:
+            loss, cleanup = finetune_execute(model, A_trch, B_trch, finetune_steps)
+    
+        # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
+        # maps computed by the model
+        if hasattr(model, "prepare_for_viz"):
+            with torch.no_grad():
+                model.prepare_for_viz(A_trch, B_trch)
+        phi_AB = model.phi_AB(model.identity_map)
+        phi_BA = model.phi_BA(model.identity_map)
+    
+        # the parameters ident, image_A, and image_B are used for their metadata
+        itk_transforms = (
+            create_itk_transform(phi_AB, model.identity_map, image_A[0], image_B[0]),
+            create_itk_transform(phi_BA, model.identity_map, image_B[0], image_A[0]),
         )
-        B_trch = F.interpolate(
-            B_trch, size=shape, mode="trilinear", align_corners=False
-        )
-
-    if finetune_steps == 0:
-        raise Exception("To indicate no finetune_steps, pass finetune_steps=None")
-
-    if finetune_steps == None:
-        with torch.no_grad():
-            loss = model(A_trch, B_trch)
-    else:
-        loss = finetune_execute(model, A_trch, B_trch, finetune_steps)
-
-    # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
-    # maps computed by the model
-    if hasattr(model, "prepare_for_viz"):
-        with torch.no_grad():
-            model.prepare_for_viz(A_trch, B_trch)
-    phi_AB = model.phi_AB(model.identity_map)
-    phi_BA = model.phi_BA(model.identity_map)
-
-    # the parameters ident, image_A, and image_B are used for their metadata
-    itk_transforms = (
-        create_itk_transform(phi_AB, model.identity_map, image_A[0], image_B[0]),
-        create_itk_transform(phi_BA, model.identity_map, image_B[0], image_A[0]),
-    )
-    if not return_artifacts:
-        return itk_transforms
-    else:
-        return itk_transforms + (to_floats(loss),)
+        if not return_artifacts:
+            return itk_transforms
+        else:
+            return itk_transforms + (to_floats(loss),)
+    finally:
+        cleanup()
 
 
 def create_itk_transform(phi, ident, image_A, image_B) -> "itk.CompositeTransform":
