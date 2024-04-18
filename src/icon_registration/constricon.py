@@ -1,7 +1,7 @@
 import os
 import random
 
-from  icon_registration import (losses, networks, DownsampleRegistration, RegistrationModule)
+from  icon_registration import (losses, networks, network_wrappers, DownsampleRegistration, RegistrationModule)
 import icon_registration.networks as networks
 import matplotlib.pyplot as plt
 import numpy as np
