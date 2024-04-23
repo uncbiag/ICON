@@ -1,4 +1,5 @@
 import icon_registration as icon
+from icon_registration.losses import ICONLoss
 import torch
 
 import footsteps
@@ -10,6 +11,113 @@ import os
 from icon_registration import config
 from icon_registration.mermaidlite import compute_warped_image_multiNC
 import icon_registration.network_wrappers as network_wrappers
+
+class GradientICONFast(icon.RegistrationModule):
+    def __init__(self, network, similarity, lmbda):
+        super().__init__()
+
+        self.regis_net = network
+        self.lmbda = lmbda
+        self.similarity = similarity
+
+    def compute_bending_energy_loss(self, phi_AB_vectorfield):
+        phi_AB_vectorfield = self.identity_map - phi_AB_vectorfield
+        if len(self.identity_map.shape) == 3:
+            bending_energy = torch.mean((
+                - phi_AB_vectorfield[:, :, 1:]
+                + phi_AB_vectorfield[:, :, 1:-1]
+            )**2)
+
+        elif len(self.identity_map.shape) == 4:
+            bending_energy = torch.mean((
+                - phi_AB_vectorfield[:, :, 1:]
+                + phi_AB_vectorfield[:, :, :-1]
+            )**2) + torch.mean((
+                - phi_AB_vectorfield[:, :, :, 1:]
+                + phi_AB_vectorfield[:, :, :, :-1]
+            )**2)
+        elif len(self.identity_map.shape) == 5:
+            bending_energy = torch.mean((
+                - phi_AB_vectorfield[:, :, 1:]
+                + phi_AB_vectorfield[:, :, :-1]
+            )**2) + torch.mean((
+                - phi_AB_vectorfield[:, :, :, 1:]
+                + phi_AB_vectorfield[:, :, :, :-1]
+            )**2) + torch.mean((
+                - phi_AB_vectorfield[:, :, :, :, 1:]
+                + phi_AB_vectorfield[:, :, :, :, :-1]
+            )**2)
+
+
+        return bending_energy * self.identity_map.shape[2] **2
+
+    def compute_similarity_measure(self, phi_AB_vectorfield, image_A, image_B):
+
+        # tag images during warping so that the similarity measure
+        # can use information about whether a sample is interpolated
+        # or extrapolated
+
+        inbounds_tag = torch.zeros(tuple(image_A.shape), device=image_A.device)
+        if len(self.input_shape) - 2 == 3:
+            inbounds_tag[:, :, 1:-1, 1:-1, 1:-1] = 1.0
+        elif len(self.input_shape) - 2 == 2:
+            inbounds_tag[:, :, 1:-1, 1:-1] = 1.0
+        else:
+            inbounds_tag[:, :, 1:-1] = 1.0
+
+        self.warped_image_A = self.as_function(
+            torch.cat([image_A, inbounds_tag], axis=1)
+        )(phi_AB_vectorfield)
+        
+        similarity_loss = self.similarity(
+            self.warped_image_A, image_B
+        )
+        return similarity_loss
+
+    def forward(self, image_A, image_B) -> ICONLoss:
+
+        assert self.identity_map.shape[2:] == image_A.shape[2:]
+        assert self.identity_map.shape[2:] == image_B.shape[2:]
+
+        # Tag used elsewhere for optimization.
+        # Must be set at beginning of forward b/c not preserved by .cuda() etc
+        self.identity_map.isIdentity = True
+
+        self.phi_AB = self.regis_net(image_A, image_B)
+        self.phi_AB_vectorfield = self.phi_AB(self.identity_map)
+
+        self.phi_BA = self.regis_net(image_B, image_A)
+        comp = self.phi_BA(self.phi_AB_vectorfield)
+        
+        similarity_loss = 2 * self.compute_similarity_measure(
+            self.phi_AB_vectorfield, image_A, image_B
+        )
+
+        bending_energy_loss = self.compute_bending_energy_loss(
+            comp
+        )
+
+        all_loss = self.lmbda * bending_energy_loss + similarity_loss
+
+        transform_magnitude = torch.mean(
+            (self.identity_map - self.phi_AB_vectorfield) ** 2
+        )
+        return ICONLoss(
+            all_loss,
+            bending_energy_loss,
+            similarity_loss,
+            transform_magnitude,
+            flips(self.phi_AB_vectorfield),
+        )
+
+    def prepare_for_viz(self, image_A, image_B):
+        self.phi_AB = self.regis_net(image_A, image_B)
+        self.phi_AB_vectorfield = self.phi_AB(self.identity_map)
+        self.phi_BA = self.regis_net(image_B, image_A)
+        self.phi_BA_vectorfield = self.phi_BA(self.identity_map)
+
+        self.warped_image_A = self.as_function(image_A)(self.phi_AB_vectorfield)
+        self.warped_image_B = self.as_function(image_B)(self.phi_BA_vectorfield)
 
 class GradientICONSparse(network_wrappers.RegistrationModule):
     def __init__(self, network, similarity, lmbda):
@@ -133,28 +241,37 @@ class GradientICONSparse(network_wrappers.RegistrationModule):
 
 def make_network(input_shape, include_last_step=False, lmbda=1.5, loss_fn=icon.LNCC(sigma=5), framework='gradICON'):
     dimension = len(input_shape) - 2
-    inner_net = icon.FunctionFromVectorField(networks.tallUNet2(dimension=dimension))
+    if framework != 'svf':
+        wrapper = icon.FunctionFromVectorField
+    else:
+        wrapper = icon.network_wrappers.SquaringVelocityField
+
+    inner_net =wrapper(networks.tallUNet2(dimension=dimension))
 
     for _ in range(2):
         inner_net = icon.TwoStepRegistration(
             icon.DownsampleRegistration(inner_net, dimension=dimension),
-            icon.FunctionFromVectorField(networks.tallUNet2(dimension=dimension))
+            wrapper(networks.tallUNet2(dimension=dimension))
         )
     if include_last_step:
         inner_net = icon.TwoStepRegistration(inner_net, icon.FunctionFromVectorField(networks.tallUNet2(dimension=dimension)))
     
-    if framework == 'gradICON':
+    if framework == 'gradICON' or framework == 'svf':
         net = GradientICONSparse(inner_net, loss_fn, lmbda=lmbda)
     elif framework == 'icon':
         #TODO: Should we make a sparse version of icon so that it behaves the same as gradicon?
         net = icon.InverseConsistentNet(inner_net, loss_fn, lmbda=lmbda)
+    elif framework == 'bendingEnergy':
+        net = icon.losses.BendingEnergyNet(inner_net, loss_fn, lmbda=lmbda)
+    elif framework == 'svf':
+        net = icon.losses.DiffusionRegularizedNet(inner_net, loss_fn, lmbda=lmbda)
     net.assign_identity_map(input_shape)
     return net
 
 
-def train_two_stage(input_shape, batch_function, GPUS, ITERATIONS_PER_STEP, BATCH_SIZE, framework='gradICON'):
+def train_two_stage(input_shape, batch_function, GPUS, ITERATIONS_PER_STEP, BATCH_SIZE, framework='gradICON', lmbda=1.5):
 
-    net = make_network(input_shape, include_last_step=False, framework=framework)
+    net = make_network(input_shape, include_last_step=False, framework=framework, lmbda=lmbda)
 
     if GPUS == 1:
         net_par = net.cuda()
