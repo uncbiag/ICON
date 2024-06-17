@@ -15,22 +15,33 @@ def scale_map(map, sz, spacing):
     :return: returns the scaled map
     """
 
-    map_scaled = torch.zeros_like(map)
     ndim = len(spacing)
 
     # This is to compensate to get back to the [-1,1] mapping of the following form
     # id[d]*=2./(sz[d]-1)
     # id[d]-=1.
 
+    scales = []
+    shifts = []
+
     for d in range(ndim):
         if sz[d + 2] > 1:
-            map_scaled[:, d, ...] = (
-                map[:, d, ...] * (2.0 / (sz[d + 2] - 1.0) / spacing[d])
-                - 1.0
-                # map[:, d, ...] * 2.0 - 1.0
-            )
+            scales.append((2.0 / (sz[d + 2] - 1.0) / spacing[d]))
+            shifts.append(-1)       
         else:
-            map_scaled[:, d, ...] = map[:, d, ...]
+            scales.append(1)
+            shifts.append(0)
+    scales = torch.tensor(scales).float().to(map.device)
+    shifts = torch.tensor(shifts).float().to(map.device)
+
+
+    if ndim == 3:
+        scales= scales[:, None, None, None]
+        shifts = shifts[:, None, None, None]
+    if ndim == 2:
+        scales= scales[:, None, None]
+        shifts = shifts[:, None, None]
+    map_scaled = map * scales + shifts
 
     return map_scaled
 
@@ -81,9 +92,7 @@ class STNFunction_ND_BCXYZ:
 
         if ndim == 2:
             # todo double check, it seems no transpose is need for 2d, already in height width design
-            input2_ordered = torch.zeros_like(input2)
-            input2_ordered[:, 0, ...] = input2[:, 1, ...]
-            input2_ordered[:, 1, ...] = input2[:, 0, ...]
+            input2_ordered = torch.flip(input2, dims=[1])
 
             if input2_ordered.shape[0] == 1 and input1.shape[0] != 1:
                 input2_ordered = input2_ordered.expand(input1.shape[0], -1, -1, -1)
@@ -95,10 +104,7 @@ class STNFunction_ND_BCXYZ:
                 align_corners=True,
             )
         if ndim == 3:
-            input2_ordered = torch.zeros_like(input2)
-            input2_ordered[:, 0, ...] = input2[:, 2, ...]
-            input2_ordered[:, 1, ...] = input2[:, 1, ...]
-            input2_ordered[:, 2, ...] = input2[:, 0, ...]
+            input2_ordered = torch.flip(input2, dims=[1])
             if input2_ordered.shape[0] == 1 and input1.shape[0] != 1:
                 input2_ordered = input2_ordered.expand(input1.shape[0], -1, -1, -1, -1)
             output = torch.nn.functional.grid_sample(

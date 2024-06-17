@@ -42,11 +42,19 @@ class RegistrationModule(nn.Module):
         Returns a python function that maps a tensor of coordinates [batch x N_dimensions x ...]
         into a tensor of intensities.
         """
-
-        return lambda coordinates: compute_warped_image_multiNC(
-            image, coordinates, self.spacing, 1
-        )
-
+        def image_as_function(coordinates):
+            if hasattr(coordinates, "isIdentity") and coordinates.shape == image.shape:
+                return image
+                
+            return compute_warped_image_multiNC(
+                image, coordinates, self.spacing, 1
+            )
+        return image_as_function
+    def tag_identity_map(self):
+        self.identity_map.isIdentity = True
+        for child in self.children():
+            if isinstance(child, RegistrationModule):
+                child.tag_identity_map()
     def assign_identity_map(self, input_shape, parents_identity_map=None):
         self.input_shape = np.array(input_shape)
         self.input_shape[0] = 1

@@ -43,7 +43,7 @@ class InverseConsistentNet(network_wrappers.RegistrationModule):
 
         # Tag used elsewhere for optimization.
         # Must be set at beginning of forward b/c not preserved by .cuda() etc
-        self.identity_map.isIdentity = True
+        self.tag_identity_map()
 
         self.phi_AB = self.regis_net(image_A, image_B)
         self.phi_BA = self.regis_net(image_B, image_A)
@@ -209,7 +209,7 @@ class GradientICON(network_wrappers.RegistrationModule):
 
         # Tag used elsewhere for optimization.
         # Must be set at beginning of forward b/c not preserved by .cuda() etc
-        self.identity_map.isIdentity = True
+        self.tag_identity_map()
 
         self.phi_AB = self.regis_net(image_A, image_B)
         self.phi_BA = self.regis_net(image_B, image_A)
@@ -252,7 +252,7 @@ class GradientICONSparse(network_wrappers.RegistrationModule):
 
         # Tag used elsewhere for optimization.
         # Must be set at beginning of forward b/c not preserved by .cuda() etc
-        self.identity_map.isIdentity = True
+        self.tag_identity_map()
 
         self.phi_AB = self.regis_net(image_A, image_B)
         self.phi_BA = self.regis_net(image_B, image_A)
@@ -454,7 +454,7 @@ class BendingEnergyNet(network_wrappers.RegistrationModule):
 
         # Tag used elsewhere for optimization.
         # Must be set at beginning of forward b/c not preserved by .cuda() etc
-        self.identity_map.isIdentity = True
+        self.tag_identity_map()
 
         self.phi_AB = self.regis_net(image_A, image_B)
         self.phi_AB_vectorfield = self.phi_AB(self.identity_map)
