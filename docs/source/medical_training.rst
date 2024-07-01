@@ -9,6 +9,16 @@ While we can learn to register 2-D images in a few minutes even on cpu, training
 - Recording all hyperparameters assosciated with each training run so that you can replicate it- this is super important if you are investing hours or days into a training run, and super easy with :mod:`footsteps`
 
 - Generating and saving metrics, visualizations and weight checkpoints throughout training.
+
+Chosing and Downloading a dataset
+=================================
+For this tutorial we will use the LUMIR dataset and evaluation provided by Learn2Reg 2024. Information on the LUMIR task is hosted on [github](https://github.com/JHU-MedImage-Reg/LUMIR_L2R/). This tutorial assumes you have completed To begin, download the LUMIR data from [Google Drive](https://drive.usercontent.google.com/download?id=1PTHAX9hZX7HBXXUGVvI1ar1LUf4aVbq9&export=download&authuser=0)
+
+.. code-block:: bash
+        > ls
+        yeeter.zip
+        > unzip yeeter.zip
+        
  
 
 Preprocessing the Dataset
