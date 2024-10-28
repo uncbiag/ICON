@@ -41,12 +41,67 @@ For this tutorial we will use the LUMIR dataset and evaluation provided by Learn
 Selecting a Model
 ================
 
-This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON
+This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON.
 
 .. tabs::
+
+   .. code-tab:: python GradICON
+
+      import icon_registration as icon
+
+      input_shape = [1, 1, 96, 112, 80]
+
+      inner_net = icon.FunctionFromVectorField(networks.tallUNet2(dimension=2))
+
+      for _ in range(3):
+           inner_net = icon.TwoStepRegistration(
+               icon.DownsampleRegistration(inner_net, dimension=2),
+               icon.FunctionFromVectorField(networks.tallUNet2(dimension=2))
+           )
+
+      net = icon.GradientICON(inner_net, icon.LNCC(sigma=4), lmbda=.5)
+   
+   .. code-tab:: python ConstrICON
+
+      input_shape = [1, 1, 96, 112, 80]
+
+      def make_network():
+
+        import icon_registration.constricon as constricon
+
+        net = multiscale_constr_model.FirstTransform(
+          multiscale_constr_model.TwoStepInverseConsistent(
+              multiscale_constr_model.ConsistentFromMatrix(
+                networks.ConvolutionalMatrixNet(dimension=3)
+            ),
+            multiscale_constr_model.TwoStepInverseConsistent(
+                multiscale_constr_model.ConsistentFromMatrix(
+                    networks.ConvolutionalMatrixNet(dimension=3)
+                ),
+                multiscale_constr_model.TwoStepInverseConsistent(
+                    multiscale_constr_model.ICONSquaringVelocityField(
+                        networks.tallUNet2(dimension=3)
+                    ),
+                    multiscale_constr_model.ICONSquaringVelocityField(
+                        networks.tallUNet2(dimension=3)
+                    ),
+                ),
+            ),
+        )
+      )
       
-    .. code-tab::
-      
+
+      loss = multiscale_constr_model.VelocityFieldDiffusion(net, icon.LNCC(5), lmbda)
+      return loss
+   .. code-tab:: python uniGradICON
+
+      import unigradicon
+
+      input_shape = [1, 1, 175, 175, 175]
+
+      def make_network():
+
+          return unigradicon.get_unigradicon()  # Initialize unified GradICON model with pretrained wieghts
        
 
 Preprocessing the Dataset
