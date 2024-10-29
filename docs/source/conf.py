@@ -38,6 +38,7 @@ extensions = [
     "sphinx.ext.linkcode",
     "sphinx.ext.mathjax",
     "matplotlib.sphinxext.plot_directive",
+    "sphinx_tabs.tabs",
 ]
 
 plot_html_show_source_link = False
