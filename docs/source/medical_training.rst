@@ -41,7 +41,7 @@ For this tutorial we will use the LUMIR dataset and evaluation provided by Learn
 Selecting a Model
 =================
 
-This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON.
+This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON. The following code is very similar to the code used to train the 2-D model for registering the MNIST test dataset, but with dimension set to 3.
 
 Create model.py as follows:
 
@@ -56,12 +56,12 @@ Create model.py as follows:
       input_shape = [1, 1, 96, 112, 80]
 
       def make_network(): 
-        inner_net = icon.FunctionFromVectorField(networks.tallUNet2(dimension=2))
+        inner_net = icon.FunctionFromVectorField(networks.tallUNet2(dimension=3))
   
         for _ in range(3):
              inner_net = icon.TwoStepRegistration(
-                 icon.DownsampleRegistration(inner_net, dimension=2),
-                 icon.FunctionFromVectorField(networks.tallUNet2(dimension=2))
+                 icon.DownsampleRegistration(inner_net, dimension=3),
+                 icon.FunctionFromVectorField(networks.tallUNet2(dimension=3))
              )
   
         net = icon.GradientICON(inner_net, icon.LNCC(sigma=4), lmbda=.5)
@@ -168,7 +168,7 @@ This is the script that you most likely need to modify for new datasets. For LUM
 Training the Model
 ==================
 
-Once the data is preprocessed, we train a network to register it. In this example we are doing inter-subject brain registration, so we can just compile batches by sampling random pairs from the dataset. We can use the exact same network architecture from the previous tutorial, just setting dimension to 3.
+Once the data is preprocessed, we train a network to register it. In this example we are doing inter-subject brain registration, so we can just compile batches by sampling random pairs from the dataset.
 
 .. code-block:: python
 
