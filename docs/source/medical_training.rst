@@ -41,7 +41,7 @@ For this tutorial we will use the LUMIR dataset and evaluation provided by Learn
 Selecting a Model
 =================
 
-This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON. The following code is very similar to the code used to train the 2-D model for registering the MNIST test dataset, but with dimension set to 3.
+This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON. The following code is very similar to the code used to train the 2-D model for registering the MNIST test dataset, but with dimension set to 3. This is also the stage to select the resolution that your model runs at. For this dataset, we will pick half of the original resolution for ConstrICON or GradICON, and for uniGradICON we will pick [175, 175, 175] to match the pretrained weights.
 
 Create model.py as follows:
 
@@ -130,6 +130,7 @@ the same resolution if they were heterogeneous resolutions or downsampling if th
         import tqdm
         import numpy as np
         import glob
+        import torch.nn.functional as F
 
         from model import input_shape
 
@@ -143,7 +144,7 @@ the same resolution if they were heterogeneous resolutions or downsampling if th
             image = image[None, None] # add batch and channel dimensions
 
             #image = torch.nn.functional.avg_pool3d(image, 2)
-            image = F.interpolate(image, input_shape, mode="trilinear") 
+            image = F.interpolate(image, input_shape[2:], mode="trilinear") 
 
             return image
 
