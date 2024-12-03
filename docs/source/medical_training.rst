@@ -17,6 +17,7 @@ If you have not already, create and activate a virtual environment, and install 
        python3 -m venv venv
        source venv/bin/activate
        pip install icon_registration
+       pip install unigradicon
 
 
        mkdir OASIS_tutorial
@@ -31,6 +32,7 @@ For this tutorial we will use the OASIS dataset and evaluation provided by Learn
 
 .. code-block:: bash
 
+        > wget https://surfer.nmr.mgh.harvard.edu/ftp/data/neurite/data/neurite-oasis.v1.0.tar
         > ls
         neurite-oasis.v1.0.tar
         > mkdir OASIS
@@ -195,7 +197,7 @@ We define a custom function for creating and preparing batches of images. Feel f
 
         from model import input_shape, make_network
 
-        BATCH_SIZE = 6
+        BATCH_SIZE = 4
         GPUS = 1
 
         def make_batch():
@@ -259,14 +261,16 @@ What we have now is a trained model that operates at resolution [128, 128, 128] 
 	import model
 	import icon_registration.itk_wrapper
 	import icon_registration.config
+        import torch
 
 	def get_model():
 	    net = model.make_network()
 	    # modify weights_location based on the training run you want to use
-	    weights_location = "results/train_halfres/network_weights_49800"
+	    weights_location = "results/train_lowres/network_weights_49800"
 	    trained_weights = torch.load(weights_location, map_location=torch.device("cpu"))
 	    net.regis_net.load_state_dict(trained_weights)
 	    net.to(icon_registration.config.device)
+            return net
 
 	def preprocess(image):
 	    # If you change the _intensity_ preprocessing in preprocess_oasis.py or make_batch(), 
@@ -289,7 +293,7 @@ What we have now is a trained model that operates at resolution [128, 128, 128] 
 	    parser.add_argument("--warped_moving_out", required=False,
 				default=None, type=str, help="The path to save the warped image.")
 	    parser.add_argument("--io_iterations", required=False,
-				 default="50", help="The number of IO iterations. Default is 50. Set to 'None' to disable IO.")
+				 default="None", help="The number of IO iterations. Default is 50. Set to 'None' to disable IO.")
 
 	    args = parser.parse_args()
 
@@ -327,7 +331,7 @@ Now, we are able to register images.
 
 .. code-block:: bash
 
-       python register_pair.py --fixed fixed.nrrd --moving moving.nrrd --transform_out transform.hdf5 --warped_moving_out warped.nrrd
+       python register_pair.py --fixed OASIS/OASIS_OAS1_0001_MR1/aligned_norm.nii.gz --moving OASIS/OASIS_OAS1_0002_MR1/aligned_norm.nii.gz --transform_out transform.hdf5
 
 The warped image warped.nrrd and transform transform.hdf5 can be viewed and further used (e.g. to warp a segmentation) using medical imaging software such as 3-D Slicer. (https://www.slicer.org/) 
 
