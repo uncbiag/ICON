@@ -43,7 +43,7 @@ def get_dataset_mnist(split, number=5, spin_augment=False):
     for _, batch in enumerate(ds):
         label = np.array(batch[1])
         batch_nines = label == number
-        if spin_augment=True:
+        if spin_augment==True:
             batch = np.array(spin_augment(torch.tensor(np.array(batch[0])[batch_nines])))
         else: 
             batch = np.array(batch[0])[batch_nines]

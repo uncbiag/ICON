@@ -19,29 +19,32 @@ If you have not already, create and activate a virtual environment, and install 
        pip install icon_registration
 
 
-       mkdir LUMIR_tutorial
-       cd LUMIR_tutorial
+       mkdir OASIS_tutorial
+       cd OASIS_tutorial
        git init
 
 
 Chosing and Downloading a dataset
 =================================
 
-For this tutorial we will use the LUMIR dataset and evaluation provided by Learn2Reg 2024. Information on the LUMIR task is hosted on `github <https://github.com/JHU-MedImage-Reg/LUMIR_L2R/>`_. To begin, download and unzip the LUMIR data from `Google Drive <https://drive.usercontent.google.com/download?id=1PTHAX9hZX7HBXXUGVvI1ar1LUf4aVbq9&export=download&authuser=0>`_
+For this tutorial we will use the OASIS dataset and evaluation provided by Learn2Reg 2021. Information on the OASIS task is hosted on `https://learn2reg.grand-challenge.org/Learn2Reg2021/`_. To begin, download and unzip the OASIS data from `the OASIS website https://www.oasis-brains.org/#data`_
 
 .. code-block:: bash
 
         > ls
-        LUMIR_L2R24_TrainVal.zip
-        > unzip LUMIR_L2R24_TrainVal.zip
+        neurite-oasis.v1.0.tar
+        > mkdir OASIS
+        > cd OASIS
+        > tar -xf ../neurite-oasis.v1.0.tar
         ...
-        > ls
-        LUMIR_L2R24_TrainVal.zip  imagesTr imagesVal
+        > cd ..
+        > ls OASIS/
+        OASIS_OAS1_0001_MR1 OASIS_OAS1_0002_MR1 ... 
         
 Selecting a Model
 =================
 
-This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON. The following code is very similar to the code used to train the 2-D model for registering the MNIST test dataset, but with dimension set to 3. This is also the stage to select the resolution that your model runs at. For this dataset, we will pick half of the original resolution for ConstrICON or GradICON, and for uniGradICON we will pick [175, 175, 175] to match the pretrained weights.
+This tutorial can be used to train the architectures GradICON or Inverse Consistency by Construction, or to finetune uniGradICON. The following code is very similar to the code used to train the 2-D model for registering the MNIST test dataset, but with dimension set to 3. This is also the stage to select the resolution that your model runs at. For this tutorial, to facilitate fast training from scratch, we will pick [128, 128, 128] for ConstrICON or GradICON, and for uniGradICON we will pick [175, 175, 175] to match the pretrained weights.
 
 Create model.py as follows:
 
@@ -52,19 +55,24 @@ Create model.py as follows:
       # model.py
 
       import icon_registration as icon
+      from icon_registration import networks
 
-      input_shape = [1, 1, 96, 112, 80]
+      input_shape = [1, 1, 128, 128, 128]
 
       def make_network(): 
         inner_net = icon.FunctionFromVectorField(networks.tallUNet2(dimension=3))
   
-        for _ in range(3):
+        for _ in range(2):
              inner_net = icon.TwoStepRegistration(
                  icon.DownsampleRegistration(inner_net, dimension=3),
                  icon.FunctionFromVectorField(networks.tallUNet2(dimension=3))
              )
+        inner_net = icon.TwoStepRegistration(
+                 inner_net,
+                 icon.FunctionFromVectorField(networks.tallUNet2(dimension=3))
+             )
   
-        net = icon.GradientICON(inner_net, icon.LNCC(sigma=4), lmbda=.5)
+        net = icon.GradientICON(inner_net, icon.LNCC(sigma=4), lmbda=1.5)
         net.assign_identity_map(input_shape)
         return net
    
@@ -74,7 +82,7 @@ Create model.py as follows:
 
       import icon_registration.constricon as constricon
 
-      input_shape = [1, 1, 96, 112, 80]
+      input_shape = [1, 1, 128, 128, 128]
 
       def make_network():
         net = constricon.FirstTransform(
@@ -118,11 +126,11 @@ Preprocessing the Dataset
 =========================
 
 Next, convert the data into a pytorch tensor that can be quickly loaded. This is also where we would handle resampling all our images to 
-the same resolution if they were heterogeneous resolutions or downsampling if the data were higher resolution than we wanted. We will initially train at half the LUMIR resolution.
+the same resolution if they were heterogeneous resolutions or downsampling if the data were higher resolution than we wanted. We will initially train at a lower than original resolution, as chosen in model.py .
 
 .. code-block:: python
 
-        #preprocess_lumir.py
+        #preprocess_oasis.py
    
         import footsteps
         import torch
@@ -136,14 +144,13 @@ the same resolution if they were heterogeneous resolutions or downsampling if th
 
         footsteps.initialize()
 
-        image_paths = glob.glob("imagesTr/LUMIRMRI_*_*.nii.gz") #
+        image_paths = glob.glob("OASIS/*/aligned_norm.nii.gz") #
 
         ds = []
 
         def process(image):
             image = image[None, None] # add batch and channel dimensions
 
-            #image = torch.nn.functional.avg_pool3d(image, 2)
             image = F.interpolate(image, input_shape[2:], mode="trilinear") 
 
             return image
@@ -157,11 +164,12 @@ the same resolution if they were heterogeneous resolutions or downsampling if th
         torch.save(ds, f"{footsteps.output_dir}/training_data.trch")
 
 
-This is the script that you most likely need to modify for new datasets. For LUMIR, this takes around 20 mins to an hour to run, but means in all subsequent runs we can start training after a few seconds. If your dataset does not fit in RAM (we use a lot of RAM) then this script will need to be modified to stream from disk. (Some would argue more RAM is cheaper than developer time.)
+This is the script that you most likely need to modify for new datasets. For OASIS, this takes around 20 mins to an hour to run, but means in all subsequent runs we can start training after a few seconds. If your dataset does not fit in RAM (we use a lot of RAM) then this script will need to be modified to stream from disk. (Some would argue more RAM is cheaper than developer time.) 
+The script will ask for a name to associate with its output, put "preprocessed_data" .
 
 .. code-block:: bash
 
-        > python preprocess_lumir.py 
+        > python preprocess_oasis.py 
         Input name of experiment:
         preprocessed_data
         Saving results to results/preprocessed_data/
@@ -170,6 +178,9 @@ Training the Model
 ==================
 
 Once the data is preprocessed, we train a network to register it. In this example we are doing inter-subject brain registration, so we can just compile batches by sampling random pairs from the dataset.
+
+
+We define a custom function for creating and preparing batches of images. Feel free to do this with a torch :class:`torch.Dataset`, but I am more confident about predicting the performance of procedural code for this task.
 
 .. code-block:: python
 
@@ -184,14 +195,8 @@ Once the data is preprocessed, we train a network to register it. In this exampl
 
         from model import input_shape, make_network
 
-
-
-We define a custom function for creating and preparing batches of images. Feel free to do this with a torch :class:`torch.Dataset`, but I am more confident about predicting the performance of procedural code for this task.
-
-.. code-block:: python
-
-        BATCH_SIZE = 8
-        GPUS = 4
+        BATCH_SIZE = 6
+        GPUS = 1
 
         def make_batch():
             image = torch.cat([random.choice(brains) for _ in range(GPUS * BATCH_SIZE)])
@@ -224,8 +229,8 @@ Then, use the function :func:`icon_registration.train.train_batchfunction` to co
        
        > python train.py
        Input name of experiment: 
-       train_halfres
-       Saving results to results/train_halfres-4
+       train_lowres
+       Saving results to results/train_lowres
 
 
 During training, a tensorboard log is created. To view this, in another window, with the virtual environment activated, run 
@@ -243,7 +248,7 @@ Tensorboard will the be viewable in the browser in port 6006.
 Evaluation and deployment
 =========================
 
-What we have now is a trained model that operates at resolution [96, 112, 80] which we want to evaluate on labelmaps and images of resolution [192, 224, 160]. This is the common case- most deep registration algorithms do not run at the original data resolution. Handling details of transform and image orientation, resolution and spacing is a sufficiently complex topic that we use an external library dedicated to this: ITK. First, we write a command line script to use our pretrained model to register a pair and write a transform. Be sure to modify the weights location based on which training run you want to use, and how far it has progressed.
+What we have now is a trained model that operates at resolution [128, 128, 128] (or [175, 175, 175] for uniGradICON) which we want to evaluate on labelmaps and images of resolution [192, 224, 160]. This is the common case- most deep registration algorithms do not run at the original data resolution. Handling details of transform and image orientation, resolution and spacing is a sufficiently complex topic that we use an external library dedicated to this: ITK. First, we write a command line script to use our pretrained model to register a pair and write a transform. Be sure to modify the weights location based on which training run you want to use, and how far it has progressed.
 
 .. code-block:: python
 
@@ -252,7 +257,7 @@ What we have now is a trained model that operates at resolution [96, 112, 80] wh
 	import argparse
 	import itk
 	import model
-	import icon_registration.register_pair
+	import icon_registration.itk_wrapper
 	import icon_registration.config
 
 	def get_model():
@@ -264,7 +269,7 @@ What we have now is a trained model that operates at resolution [96, 112, 80] wh
 	    net.to(icon_registration.config.device)
 
 	def preprocess(image):
-	    # If you change the _intensity_ preprocessing in preprocess_lumir.py or make_batch(), 
+	    # If you change the _intensity_ preprocessing in preprocess_oasis.py or make_batch(), 
 	    # make a corresponding change here.
 
 	    image = itk.CastImageFilter[type(image), itk.Image[itk.F, 3]].New()(image)
@@ -325,3 +330,10 @@ Now, we are able to register images.
        python register_pair.py --fixed fixed.nrrd --moving moving.nrrd --transform_out transform.hdf5 --warped_moving_out warped.nrrd
 
 The warped image warped.nrrd and transform transform.hdf5 can be viewed and further used (e.g. to warp a segmentation) using medical imaging software such as 3-D Slicer. (https://www.slicer.org/) 
+
+Load the images and transform, and warp the moving image using the Transforms module.
+
+.. figure:: _static/slicer.png
+   :align: center
+
+
