@@ -33,6 +33,6 @@ jobs:
     - name: Build docs
       working-directory: docs
       run: |
-        pip install sphinx sphinx-rtd-theme monai sphinx-tabs
+        pip install sphinx sphinx-rtd-theme monai sphinx-tabs sphinx-copybutton
         make clean
         make html SPHINXOPTS="-W --keep-going" 

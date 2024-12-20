@@ -12,13 +12,23 @@ While we can learn to register 2-D images in a few minutes even on cpu, training
 
 If you have not already, create and activate a virtual environment, and install :mod:`icon_registration`
 
-.. code-block:: bash
+.. tabs::
+
+   .. code-tab:: bash venv
        
        python3 -m venv venv
        source venv/bin/activate
-       pip install icon_registration
-       pip install unigradicon
+       pip install icon_registration unigradicon
 
+       mkdir OASIS_tutorial
+       cd OASIS_tutorial
+       git init
+
+   .. code-tab:: bash conda
+       
+       conda create -n iconregistration python==3.10
+       conda activate iconregistration
+       pip install icon_registration unigradicon
 
        mkdir OASIS_tutorial
        cd OASIS_tutorial
@@ -28,7 +38,7 @@ If you have not already, create and activate a virtual environment, and install 
 Chosing and Downloading a dataset
 =================================
 
-For this tutorial we will use the OASIS dataset and evaluation provided by Learn2Reg 2021. Information on the OASIS task is hosted on `https://learn2reg.grand-challenge.org/Learn2Reg2021/`_. To begin, download and unzip the OASIS data from `the OASIS website https://www.oasis-brains.org/#data`_
+For this tutorial we will use the `OASIS dataset <https://sites.wustl.edu/oasisbrains/#data>`_ and evaluation provided by Learn2Reg 2021. Information on the OASIS task, and the data download, are hosted on https://learn2reg.grand-challenge.org/Learn2Reg2021/. To begin, download and unzip the OASIS data.
 
 .. code-block:: bash
 
@@ -127,8 +137,7 @@ Create model.py as follows:
 Preprocessing the Dataset
 =========================
 
-Next, convert the data into a pytorch tensor that can be quickly loaded. This is also where we would handle resampling all our images to 
-the same resolution if they were heterogeneous resolutions or downsampling if the data were higher resolution than we wanted. We will initially train at a lower than original resolution, as chosen in model.py .
+Next, convert the data into a pytorch tensor that can be quickly loaded. This is also where we handle resampling all our images to the same resolution if they were heterogeneous resolutions or downsampling if the data were higher resolution than we wanted. For this tutorial, we train at a lower than original resolution, as chosen in model.py . Once you have completed this tutorial, if you are training GradICON on your own dataset, you can choose to retrain with input_shape to your data's native resolution to get a more performant model at the cost of longer training.
 
 .. code-block:: python
 
@@ -166,12 +175,11 @@ the same resolution if they were heterogeneous resolutions or downsampling if th
         torch.save(ds, f"{footsteps.output_dir}/training_data.trch")
 
 
-This is the script that you most likely need to modify for new datasets. For OASIS, this takes around 20 mins to an hour to run, but means in all subsequent runs we can start training after a few seconds. If your dataset does not fit in RAM (we use a lot of RAM) then this script will need to be modified to stream from disk. (Some would argue more RAM is cheaper than developer time.) 
-The script will ask for a name to associate with its output, put "preprocessed_data" .
+This is the script that you most likely need to modify for new datasets. For OASIS, this takes around 5 minutes to run, but means in all subsequent runs we can start training after a few seconds. If your dataset does not fit in RAM  then this script will need to be modified to stream from disk.
 
 .. code-block:: bash
 
-        > python preprocess_oasis.py 
+        > echo "preprocessed_data" | python preprocess_oasis.py 
         Input name of experiment:
         preprocessed_data
         Saving results to results/preprocessed_data/
@@ -243,6 +251,12 @@ During training, a tensorboard log is created. To view this, in another window, 
 
 Tensorboard will the be viewable in the browser in port 6006.
 
+If you are training on a remote server, to view the tensorboard dashboard, connect with
+
+.. code-block:: bash
+
+       > ssh -L 6006:localhost:6006 your_username@yourserver.com
+
 .. figure:: _static/tensorboard.png
    :align: center
 
@@ -263,10 +277,12 @@ What we have now is a trained model that operates at resolution [128, 128, 128] 
 	import icon_registration.config
         import torch
 
+        # modify weights_location based on the training run you want to use
+        weights_location = "results/train_lowres/network_weights_49800"
+
 	def get_model():
 	    net = model.make_network()
-	    # modify weights_location based on the training run you want to use
-	    weights_location = "results/train_lowres/network_weights_49800"
+
 	    trained_weights = torch.load(weights_location, map_location=torch.device("cpu"))
 	    net.regis_net.load_state_dict(trained_weights)
 	    net.to(icon_registration.config.device)
@@ -283,7 +299,7 @@ What we have now is a trained model that operates at resolution [128, 128, 128] 
 	    return image
 
 	if __name__ == "__main__":
-	    parser = argparse.ArgumentParser(description="Register two images using unigradicon.")
+	    parser = argparse.ArgumentParser(description="Register two images")
 	    parser.add_argument("--fixed", required=True, type=str,
 				 help="The path of the fixed image.")
 	    parser.add_argument("--moving", required=True, type=str,
@@ -333,11 +349,25 @@ Now, we are able to register images.
 
        python register_pair.py --fixed OASIS/OASIS_OAS1_0001_MR1/aligned_norm.nii.gz --moving OASIS/OASIS_OAS1_0002_MR1/aligned_norm.nii.gz --transform_out transform.hdf5
 
-The warped image warped.nrrd and transform transform.hdf5 can be viewed and further used (e.g. to warp a segmentation) using medical imaging software such as 3-D Slicer. (https://www.slicer.org/) 
+The file `transform.hdf5` is an ITK transform. To warp an image or segmentation using the transform transform.hdf5, unigradicon cli tools are available
+
+.. code-block:: bash
+
+       unigradicon-warp --fixed OASIS/OASIS_OAS1_0001/MR1/aligned_norm.nii.gz --moving OASIS/OASIS_OAS1_0002_MR1/aligned_seg35.nii.gz --transform transform.hdf5 --warped_moving_out warped_seg35.nii.gz --nearest_neighbor
+
+       unigradicon-dice OASIS_OAS1_0001_MR1/aligned_seg35.nii.gz warped_seg32.nii.gz
+
+       unigradicon-warp --fixed OASIS/OASIS_OAS1_0001/MR1/aligned_norm.nii.gz --moving OASIS/OASIS_OAS1_0002_MR1/aligned_norm.nii.gz --transform transform.hdf5 --warped_moving_out warped.nrrd --linear
+
+For a GUI experience, the warped image warped.nrrd and transform transform.hdf5 can be viewed and further used (e.g. to warp a segmentation) using medical imaging software such as 3-D Slicer. (https://www.slicer.org/) 
 
 Load the images and transform, and warp the moving image using the Transforms module.
 
 .. figure:: _static/slicer.png
    :align: center
+
+Learn2Reg Submission
+====================
+
 
 
