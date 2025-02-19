@@ -93,6 +93,8 @@ Create model.py as follows:
       # model.py
 
       import icon_registration.constricon as constricon
+      import icon_registration as icon
+      import icon_registration.networks as networks
 
       input_shape = [1, 1, 128, 128, 128]
 
@@ -126,6 +128,8 @@ Create model.py as follows:
       # model.py
 
       import icon_registration.constricon as constricon
+      import icon_registration as icon
+      import icon_registration.networks as networks
 
       input_shape = [1, 1, 128, 128, 128]
 
@@ -144,7 +148,7 @@ Create model.py as follows:
                         networks.ConvolutionalMatrixNet(dimension=3)
                     ),
                     constricon.ConsistentFromMatrix(
-                        etworks.ConvolutionalMatrixNet(dimension=3)
+                        networks.ConvolutionalMatrixNet(dimension=3)
                     ),
                 ),
             ),
