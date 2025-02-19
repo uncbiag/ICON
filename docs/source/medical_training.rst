@@ -121,6 +121,40 @@ Create model.py as follows:
       net.assign_identity_map(input_shape)
       return net
 
+.. code-tab:: python Affine
+
+      # model.py
+
+      import icon_registration.constricon as constricon
+
+      input_shape = [1, 1, 128, 128, 128]
+
+      def make_network():
+        net = constricon.FirstTransform(
+          constricon.TwoStepInverseConsistent(
+              constricon.ConsistentFromMatrix(
+                networks.ConvolutionalMatrixNet(dimension=3)
+            ),
+            constricon.TwoStepInverseConsistent(
+                constricon.ConsistentFromMatrix(
+                    networks.ConvolutionalMatrixNet(dimension=3)
+                ),
+                constricon.TwoStepInverseConsistent(
+                    constricon.ConsistentFromMatrix(
+                        networks.ConvolutionalMatrixNet(dimension=3)
+                    ),
+                    constricon.ConsistentFromMatrix(
+                        etworks.ConvolutionalMatrixNet(dimension=3)
+                    ),
+                ),
+            ),
+          )
+        )
+      net = icon.BendingEnergyNet(net, icon.LNCC(5), lmbda=.03)
+      net.assign_identity_map(input_shape)
+      return net
+
+
    .. code-tab:: python uniGradICON
 
       # model.py
