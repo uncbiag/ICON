@@ -121,7 +121,7 @@ Create model.py as follows:
       net.assign_identity_map(input_shape)
       return net
 
-.. code-tab:: python Affine
+   .. code-tab:: python Affine
 
       # model.py
 
