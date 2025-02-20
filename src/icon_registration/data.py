@@ -8,8 +8,28 @@ import tqdm
 
 from icon_registration import config
 
+def spin_augment(image_A):
 
-def get_dataset_mnist(split, number=5):
+    noise = torch.randn((image_A.shape[0], 2, 2))
+
+    noise = noise - torch.permute(noise, (0, 2, 1))
+
+    forward = torch.linalg.matrix_exp(noise / .0200)
+
+    full = torch.zeros((image_A.shape[0], 2, 3))
+
+    full[:, :2, :2] = forward
+
+    grid_shape = list(image_A.shape)
+    grid_shape[1] = 2
+    forward_grid = F.affine_grid(full, grid_shape)
+
+    warped_A = F.grid_sample(image_A, forward_grid, padding_mode="border")
+
+    return warped_A
+
+
+def get_dataset_mnist(split, number=5, spin_augment=False):
     ds = torch.utils.data.DataLoader(
         torchvision.datasets.MNIST(
             "./files/",
@@ -23,7 +43,11 @@ def get_dataset_mnist(split, number=5):
     for _, batch in enumerate(ds):
         label = np.array(batch[1])
         batch_nines = label == number
-        images.append(np.array(batch[0])[batch_nines])
+        if spin_augment==True:
+            batch = np.array(spin_augment(torch.tensor(np.array(batch[0])[batch_nines])))
+        else: 
+            batch = np.array(batch[0])[batch_nines]
+        images.append(batch)
     images = np.concatenate(images)
 
     ds = torch.utils.data.TensorDataset(torch.Tensor(images))
