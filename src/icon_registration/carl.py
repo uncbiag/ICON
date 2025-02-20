@@ -1,4 +1,5 @@
 import icon_registration as icon
+import torch.nn as nn
 import icon_registration.losses
 import icon_registration.network_wrappers as network_wrappers
 import icon_registration.networks as networks
@@ -262,7 +263,7 @@ def augmentify(network):
     )
 
     network.regis_net = augmenter
-    network.assign_identity_map(input_shape)
+    network.assign_identity_map(network.input_shape)
     return network
 
 
