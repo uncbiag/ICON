@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from icon_registration import config, network_wrappers
 
-from .mermaidlite import compute_warped_image_multiNC
+#from .mermaidlite import compute_warped_image_multiNC
 
 
 def to_floats(stats):
@@ -574,7 +574,6 @@ def gaussian_blur(tensor, kernel_size, sigma, padding="same"):
 
     return out
 
-
 class LNCC(SimilarityBase):
     def __init__(self, sigma):
         super().__init__(isInterpolated=False)
@@ -582,35 +581,45 @@ class LNCC(SimilarityBase):
 
     def blur(self, tensor):
         return gaussian_blur(tensor, self.sigma * 4 + 1, self.sigma)
-
-    def __call__(self, image_A, image_B):
-        I = image_A
-        J = image_B
-        assert I.shape == J.shape, "The shape of image I and J sould be the same."
-
-        return torch.mean(
-            1
-            - (self.blur(I * J) - (self.blur(I) * self.blur(J)))
-            / torch.sqrt(
+    
+    def calculate_lncc(self, I, J):
+        return (self.blur(I * J) - (self.blur(I) * self.blur(J))) / torch.sqrt(
                 (torch.relu(self.blur(I * I) - self.blur(I) ** 2) + 0.00001)
                 * (torch.relu(self.blur(J * J) - self.blur(J) ** 2) + 0.00001)
             )
-        )
 
-class SquaredLNCC(LNCC):
-    def __call__(self, image_A, image_B):
+    def __call__(self, image_A, image_B, mask_B=None):
         I = image_A
         J = image_B
         assert I.shape == J.shape, "The shape of image I and J sould be the same."
+        
+        if mask_B is not None:
+            assert mask_B.shape == J.shape, "The shape of mask and J sould be the same."
+            assert torch.sum(mask_B) > 0, "The mask should have nonzero values."
+        
+        lncc = self.calculate_lncc(I, J)
+        
+        if mask_B is not None:
+            lncc = lncc[mask_B.bool()]
 
-        return torch.mean(
-            1
-            - ((self.blur(I * J) - (self.blur(I) * self.blur(J)))
-            / torch.sqrt(
-                (torch.relu(self.blur(I * I) - self.blur(I) ** 2) + 0.00001)
-                * (torch.relu(self.blur(J * J) - self.blur(J) ** 2) + 0.00001)
-            ))**2
-        )
+        return torch.mean(1 - lncc)
+
+class SquaredLNCC(LNCC):
+    def __call__(self, image_A, image_B, mask_B=None):
+        I = image_A
+        J = image_B
+        assert I.shape == J.shape, "The shape of image I and J sould be the same."
+        
+        if mask_B is not None:
+            assert mask_B.shape == J.shape, "The shape of mask and J sould be the same."
+            assert torch.sum(mask_B) > 0, "The mask should have nonzero values."
+        
+        lncc = self.calculate_lncc(I, J)
+        
+        if mask_B is not None:
+            lncc = lncc[mask_B.bool()]
+            
+        return torch.mean(1 - lncc**2)
 
 class LNCCOnlyInterpolated(SimilarityBase):
     def __init__(self, sigma):
@@ -798,13 +807,21 @@ class MINDSSC(SimilarityBase):
 
         # permute to have same ordering as C++ code
         mind = mind[:, torch.Tensor([6, 8, 1, 11, 2, 10, 0, 7, 9, 4, 5, 3]).long(), :, :, :]
-
         return mind
 
-    def __call__(self, image_A, image_B):
+    def __call__(self, image_A, image_B, mask_B=None):
         assert image_A.shape == image_B.shape, "The shape of image_A and image_B sould be the same."
         assert len(image_A.shape) - 2 == 3, "The input image should be 3D."
-        return torch.mean((self.compute_mindssc(image_A) - self.compute_mindssc(image_B)) ** 2)
+        
+        difference = self.compute_mindssc(image_A) - self.compute_mindssc(image_B)
+        
+        if mask_B is not None:
+            assert mask_B.shape == image_B.shape, "The shape of mask and image_B sould be the same."
+            assert torch.sum(mask_B) > 0, "The mask should have nonzero values."
+            mask_B = mask_B.expand(-1, difference.shape[1], -1, -1, -1)
+            difference = difference[mask_B.bool()]
+            
+        return torch.mean(difference ** 2)
 
 def flips(phi, in_percentage=False):
     if len(phi.size()) == 5:

@@ -23,6 +23,20 @@ def finetune_execute(model, image_A, image_B, steps):
     model.load_state_dict(state_dict)
     return loss
 
+def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps):
+    state_dict = copy.deepcopy(model.state_dict())
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.00002)
+    for _ in range(steps):
+        optimizer.zero_grad()
+        loss_tuple = model(image_A, image_B, mask_A, mask_B)
+        print(loss_tuple)
+        loss_tuple[0].backward()
+        optimizer.step()
+    with torch.no_grad():
+        loss =  model(image_A, image_B, mask_A, mask_B)
+    model.load_state_dict(state_dict)
+    return loss
+
 
 def register_pair(
     model, image_A, image_B, finetune_steps=None, return_artifacts=False
@@ -36,7 +50,7 @@ def register_pair(
 
     A_npy = np.array(image_A)
     B_npy = np.array(image_B)
-
+    
     assert(np.max(A_npy) != np.min(A_npy))
     assert(np.max(B_npy) != np.min(B_npy))
     # turn images into torch Tensors: add feature and batch dimensions (each of length 1)
@@ -80,6 +94,76 @@ def register_pair(
         return itk_transforms
     else:
         return itk_transforms + (to_floats(loss),)
+    
+def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_steps=None, return_artifacts=False):
+
+    assert isinstance(image_A, itk.Image)
+    assert isinstance(image_B, itk.Image)
+    
+    assert isinstance(mask_A, itk.Image)
+    assert isinstance(mask_B, itk.Image)
+
+    A_npy = np.array(image_A)
+    B_npy = np.array(image_B)
+    
+    mask_A_npy = np.array(mask_A)
+    mask_B_npy = np.array(mask_B)
+
+    assert(np.max(A_npy) != np.min(A_npy))
+    assert(np.max(B_npy) != np.min(B_npy))
+
+    # turn images into torch Tensors: add feature and batch dimensions (each of length 1)
+    A_trch = torch.Tensor(A_npy).to(config.device)[None, None]
+    B_trch = torch.Tensor(B_npy).to(config.device)[None, None]
+    mask_A_trch = torch.Tensor(mask_A_npy).to(config.device)[None, None]
+    mask_B_trch = torch.Tensor(mask_B_npy).to(config.device)[None, None]
+
+    shape = model.identity_map.shape
+
+    # Here we resize the input images to the shape expected by the neural network. This affects the
+    # pixel stride as well as the magnitude of the displacement vectors of the resulting
+    # displacement field, which create_itk_transform will have to compensate for.
+    A_resized = F.interpolate(
+        A_trch, size=shape[2:], mode="trilinear", align_corners=False
+    )
+    B_resized = F.interpolate(
+        B_trch, size=shape[2:], mode="trilinear", align_corners=False
+    )
+    
+    mask_A_resized = F.interpolate(
+        mask_A_trch, size=shape[2:], mode="nearest"
+    )
+    mask_B_resized = F.interpolate(
+        mask_B_trch, size=shape[2:], mode="nearest"
+    )
+    
+    if finetune_steps == 0:
+        raise Exception("To indicate no finetune_steps, pass finetune_steps=None")
+
+    if finetune_steps == None:
+        with torch.no_grad():
+            loss = model(A_resized, B_resized, mask_A_resized, mask_B_resized)  
+    else:
+        loss = finetune_execute_mask(model, A_resized, B_resized, mask_A_resized, mask_B_resized, finetune_steps)
+
+    # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
+    # maps computed by the model
+    if hasattr(model, "prepare_for_viz"):
+        with torch.no_grad():
+            model.prepare_for_viz(A_resized, B_resized)
+    phi_AB = model.phi_AB(model.identity_map)
+    phi_BA = model.phi_BA(model.identity_map)
+
+    # the parameters ident, image_A, and image_B are used for their metadata
+    itk_transforms = (
+        create_itk_transform(phi_AB, model.identity_map, image_A, image_B),
+        create_itk_transform(phi_BA, model.identity_map, image_B, image_A),
+    )
+    if not return_artifacts:
+        return itk_transforms
+    else:
+        return itk_transforms + (to_floats(loss),)
+
 
 def register_pair_with_multimodalities(
     model, image_A: list, image_B: list, finetune_steps=None, return_artifacts=False
