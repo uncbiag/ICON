@@ -23,17 +23,18 @@ def finetune_execute(model, image_A, image_B, steps):
     model.load_state_dict(state_dict)
     return loss
 
+
 def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps):
     state_dict = copy.deepcopy(model.state_dict())
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00002)
     for _ in range(steps):
         optimizer.zero_grad()
-        loss_tuple = model(image_A, image_B, mask_A, mask_B)
+        loss_tuple = model(image_A, image_B, mask_A=mask_A, mask_B=mask_B)
         print(loss_tuple)
         loss_tuple[0].backward()
         optimizer.step()
     with torch.no_grad():
-        loss =  model(image_A, image_B, mask_A, mask_B)
+        loss =  model(image_A, image_B, mask_A=mask_A, mask_B=mask_B)
     model.load_state_dict(state_dict)
     return loss
 
@@ -106,8 +107,8 @@ def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_st
     A_npy = np.array(image_A)
     B_npy = np.array(image_B)
     
-    mask_A_npy = np.array(mask_A)
-    mask_B_npy = np.array(mask_B)
+    A_mask_npy = np.array(mask_A)
+    B_mask_npy = np.array(mask_B)
 
     assert(np.max(A_npy) != np.min(A_npy))
     assert(np.max(B_npy) != np.min(B_npy))
@@ -115,8 +116,8 @@ def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_st
     # turn images into torch Tensors: add feature and batch dimensions (each of length 1)
     A_trch = torch.Tensor(A_npy).to(config.device)[None, None]
     B_trch = torch.Tensor(B_npy).to(config.device)[None, None]
-    mask_A_trch = torch.Tensor(mask_A_npy).to(config.device)[None, None]
-    mask_B_trch = torch.Tensor(mask_B_npy).to(config.device)[None, None]
+    A_mask_trch = torch.Tensor(A_mask_npy).to(config.device)[None, None]
+    B_mask_trch = torch.Tensor(B_mask_npy).to(config.device)[None, None]
 
     shape = model.identity_map.shape
 
@@ -130,11 +131,11 @@ def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_st
         B_trch, size=shape[2:], mode="trilinear", align_corners=False
     )
     
-    mask_A_resized = F.interpolate(
-        mask_A_trch, size=shape[2:], mode="nearest"
+    A_mask_resized = F.interpolate(
+        A_mask_trch, size=shape[2:], mode="nearest"
     )
-    mask_B_resized = F.interpolate(
-        mask_B_trch, size=shape[2:], mode="nearest"
+    B_mask_resized = F.interpolate(
+        B_mask_trch, size=shape[2:], mode="nearest"
     )
     
     if finetune_steps == 0:
@@ -142,9 +143,9 @@ def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_st
 
     if finetune_steps == None:
         with torch.no_grad():
-            loss = model(A_resized, B_resized, mask_A_resized, mask_B_resized)  
+            loss = model(A_resized, B_resized, mask_A=A_mask_resized, mask_B=B_mask_resized)  
     else:
-        loss = finetune_execute_mask(model, A_resized, B_resized, mask_A_resized, mask_B_resized, finetune_steps)
+        loss = finetune_execute_mask(model, A_resized, B_resized, A_mask_resized, B_mask_resized, finetune_steps)
 
     # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
     # maps computed by the model
