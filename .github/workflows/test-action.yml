@@ -12,13 +12,14 @@ jobs:
       max-parallel: 5
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: Set up Python 3.7
       uses: actions/setup-python@v2
       with:
         python-version: 3.7
     - name: Install dependencies
       run: |
+        pip install -U pip
         pip install -r requirements.txt
         
         pip install -e .
@@ -32,6 +33,6 @@ jobs:
     - name: Build docs
       working-directory: docs
       run: |
-        pip install sphinx sphinx-rtd-theme monai
+        pip install sphinx sphinx-rtd-theme monai sphinx-tabs sphinx-copybutton
         make clean
         make html SPHINXOPTS="-W --keep-going" 
