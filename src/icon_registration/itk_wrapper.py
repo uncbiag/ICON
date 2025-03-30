@@ -20,7 +20,7 @@ def finetune_execute(model, image_A, image_B, steps):
         optimizer.step()
     with torch.no_grad():
         loss = model(image_A, image_B)
-    model.load_state_dict(state_dict)
+    #model.load_state_dict(state_dict)
     return loss
 
 
@@ -60,6 +60,7 @@ def register_pair(
     if finetune_steps == None:
         with torch.no_grad():
             loss = model(A_resized, B_resized)
+            print(loss)
     else:
         loss = finetune_execute(model, A_resized, B_resized, finetune_steps)
 
