@@ -29,7 +29,7 @@ def spin_augment(image_A):
     return warped_A
 
 
-def get_dataset_mnist(split, number=5, spin_augment=False):
+def get_dataset_mnist(split, number=5, do_spin_augment=False):
     ds = torch.utils.data.DataLoader(
         torchvision.datasets.MNIST(
             "./files/",
@@ -43,7 +43,7 @@ def get_dataset_mnist(split, number=5, spin_augment=False):
     for _, batch in enumerate(ds):
         label = np.array(batch[1])
         batch_nines = label == number
-        if spin_augment==True:
+        if do_spin_augment==True:
             batch = np.array(spin_augment(torch.tensor(np.array(batch[0])[batch_nines])))
         else: 
             batch = np.array(batch[0])[batch_nines]

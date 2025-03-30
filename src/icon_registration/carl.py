@@ -126,6 +126,7 @@ class RandomMatrix(icon.RegistrationModule):
                 a.device
             )
             x = noise
+            x = x + torch.randn(x.shape, device=x.device) * .05
             x = torch.cat(
                 [
                     x,
@@ -244,11 +245,11 @@ class RotationFunctionFromVectorField(icon.RegistrationModule):
         field = self.as_function(displacements)
 
         def transform(coords):
+            if hasattr(coords, "isIdentity") and coords.shape[1:] == displacements.shape[1:]:
+                return coords + displacements
             coords_reflected = (
                 coords - 2 * coords * (coords < 0) - 2 * (coords - 1) * (coords > 1)
             )
-            if hasattr(coords, "isIdentity") and coords.shape == displacements.shape:
-                return coords + displacemnts
             return coords + 2 * field(coords) - field(coords_reflected)
 
         return transform
