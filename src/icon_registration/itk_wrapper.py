@@ -9,9 +9,9 @@ from icon_registration import config
 from icon_registration.losses import to_floats
 
 
-def finetune_execute(model, image_A, image_B, steps):
+def finetune_execute(model, image_A, image_B, steps, lr=0.00002):
     state_dict = copy.deepcopy(model.state_dict())
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.00002)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     for _ in range(steps):
         optimizer.zero_grad()
         loss_tuple = model(image_A, image_B)
@@ -24,9 +24,9 @@ def finetune_execute(model, image_A, image_B, steps):
     return loss
 
 
-def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps):
+def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps, lr=0.00002):
     state_dict = copy.deepcopy(model.state_dict())
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.00002)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     for _ in range(steps):
         optimizer.zero_grad()
         loss_tuple = model(image_A, image_B, mask_A=mask_A, mask_B=mask_B)
@@ -40,7 +40,7 @@ def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps):
 
 
 def register_pair(
-    model, image_A, image_B, finetune_steps=None, return_artifacts=False
+    model, image_A, image_B, finetune_steps=None, return_artifacts=False, lr=0.00002
 ) -> "(itk.CompositeTransform, itk.CompositeTransform)":
 
     assert isinstance(image_A, itk.Image)
@@ -76,7 +76,7 @@ def register_pair(
         with torch.no_grad():
             loss = model(A_resized, B_resized)
     else:
-        loss = finetune_execute(model, A_resized, B_resized, finetune_steps)
+        loss = finetune_execute(model, A_resized, B_resized, finetune_steps, lr)
 
     # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
     # maps computed by the model
@@ -96,7 +96,7 @@ def register_pair(
     else:
         return itk_transforms + (to_floats(loss),)
     
-def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_steps=None, return_artifacts=False):
+def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_steps=None, return_artifacts=False, lr=0.00002):
 
     assert isinstance(image_A, itk.Image)
     assert isinstance(image_B, itk.Image)
@@ -145,7 +145,7 @@ def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_st
         with torch.no_grad():
             loss = model(A_resized, B_resized, mask_A=A_mask_resized, mask_B=B_mask_resized)  
     else:
-        loss = finetune_execute_mask(model, A_resized, B_resized, A_mask_resized, B_mask_resized, finetune_steps)
+        loss = finetune_execute_mask(model, A_resized, B_resized, A_mask_resized, B_mask_resized, finetune_steps, lr)
 
     # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
     # maps computed by the model
@@ -167,7 +167,7 @@ def register_pair_with_mask(model, image_A, image_B, mask_A, mask_B, finetune_st
 
 
 def register_pair_with_multimodalities(
-    model, image_A: list, image_B: list, finetune_steps=None, return_artifacts=False
+    model, image_A: list, image_B: list, finetune_steps=None, return_artifacts=False, lr=0.00002
 ) -> "(itk.CompositeTransform, itk.CompositeTransform)":
 
     assert len(image_A) == len(image_B), "image_A and image_B should have the same number of modalities."
@@ -209,7 +209,7 @@ def register_pair_with_multimodalities(
         with torch.no_grad():
             loss = model(A_trch, B_trch)
     else:
-        loss = finetune_execute(model, A_trch, B_trch, finetune_steps)
+        loss = finetune_execute(model, A_trch, B_trch, finetune_steps, lr)
 
     # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
     # maps computed by the model
