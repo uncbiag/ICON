@@ -1,0 +1,71 @@
+#!/usr/bin/env python
+
+import argparse
+
+import icon_registration as icon
+import icon_registration.itk_wrapper
+import itk
+import numpy as np
+import torch
+import importlib
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model", required=True)
+parser.add_argument("--weights_path")
+parser.add_argument("--fixed_image", required=True)
+parser.add_argument("--moving_image", required=True)
+parser.add_argument("--transform_out")
+parser.add_argument("--displacement_image_out")
+parser.add_argument("--warped_moving_out")
+parser.add_argument("--finetune", action='store_true')
+
+args = parser.parse_args()
+
+model_package_name = ".".join(args.model.split(".")[:-1])
+model_name = args.model.split(".")[-1]
+
+model_package = importlib.import_module(model_package_name)
+net = getattr(model_package, model_name)()
+
+if args.weights_path:
+  weights = torch.load(args.weights_path)
+  net.regis_net.load_state_dict(weights)
+
+fixed_image = itk.imread(args.fixed_image)
+moving_image = itk.imread(args.moving_image)
+
+# We want images normalized to 0.0, 1.0
+for image in fixed_image, moving_image:
+    assert(np.abs(np.max(np.array(image)) - 1.0) < 0.2)
+    assert(np.abs(np.min(np.array(image))) < 0.2)
+
+phi, _ = icon.itk_wrapper.register_pair(
+    net, moving_image, fixed_image, finetune_steps=90 if args.finetune else None
+)
+
+if args.transform_out:
+    itk.transformwrite([phi], args.transform_out)
+
+if args.displacement_image_out:
+    filter = itk.TransformToDisplacementFieldFilter[
+        itk.itkImagePython.itkImageVF33, itk.D
+    ].New()
+    decorator = itk.DataObjectDecorator[itk.Transform[itk.D, 3, 3]].New()
+    decorator.Set(phi)
+    filter.SetInput(decorator)
+    filter.SetReferenceImage(fixed_image)
+    filter.SetUseReferenceImage(True)
+    filter.Update()
+    itk.imwrite(filter.GetOutput(), args.displacement_image_out)
+
+if args.warped_moving_out:
+    warped = itk.resample_image_filter(
+        moving_image,
+        use_reference_image=True,
+        reference_image=fixed_image,
+        transform=phi,
+        interpolator=itk.LinearInterpolateImageFunction.New(moving_image),
+    )
+    itk.imwrite(warped, args.warped_moving_out)
+
+
