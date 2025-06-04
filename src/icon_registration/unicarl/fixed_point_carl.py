@@ -116,7 +116,7 @@ class SomeDownsampleNet(nn.Module):
 
 # here be dragons.
 # (probably)
-z = torch.linalg.inv(torch.tensor([[1.0, 0], [0, 1]]).cuda())
+z = torch.linalg.inv(torch.tensor([[1.0, 0], [0, 1]]).to(icon_registration.config.device))
 
 class CrossAttentionBlock(torch.nn.Module):
     def __init__(self, dimension=2):
@@ -378,7 +378,7 @@ def even_blur(tensor, sigma):
     kernel_size = 3 * sigma
     kernel_size += 1 - kernel_size%2
     
-    kernel1d = _get_gaussian_kernel1d(kernel_size=kernel_size, sigma=sigma, device=tensor.device).to(
+    kernel1d = _get_gaussian_kernel1d(kernel_size=kernel_size, sigma=sigma).to(
         tensor.device, dtype=tensor.dtype
     )
     out = tensor

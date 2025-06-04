@@ -90,7 +90,7 @@ class NoDownsampleNet(nn.Module):
 
 # here be dragons.
 # (probably)
-z = torch.linalg.inv(torch.tensor([[1.0, 0], [0, 1]]).cuda())
+z = torch.linalg.inv(torch.tensor([[1.0, 0], [0, 1]]).to(icon_registration.config.device))
 
 
 class RandomMatrix(icon.RegistrationModule):
