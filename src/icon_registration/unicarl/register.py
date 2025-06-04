@@ -11,12 +11,11 @@ import icon_registration.unicarl.unigradicon_train_parallel
 
 
 def get_model(path=None):
-    net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, unigradicon_train_parallel.input_shape, equivariantize=False)
+    net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, icon_registration.unicarl.unigradicon_train_parallel.input_shape, equivariantize=False)
     if path:
-        net.regis_net.load_state_dict(torch.load(path))
+        net.regis_net.load_state_dict(torch.load(path, map_location=icon_registration.config.device))
     net.regis_net = net.regis_net.netPsi.netPsi
     net.assign_identity_map([1, 1, 160, 160, 160])
-    net.cuda()
     net.eval()
     return net
 
