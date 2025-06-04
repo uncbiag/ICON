@@ -53,7 +53,7 @@ class Test2DRegistrationTrain(unittest.TestCase):
 
         # Test that folds are rare enough
         self.assertLess(np.mean(np.exp(np.array(y)[-5:, 3] - 0.1)), 2)
-        for l in y:
+        for l in y[-3:]:
             print(l)
 
     def test_2d_registration_train_GradICON(self):
@@ -106,5 +106,5 @@ class Test2DRegistrationTrain(unittest.TestCase):
 
         # Test that folds are rare enough
         self.assertLess(np.mean(np.exp(np.array(y)[-5:, 3] - 0.1)), 2)
-        for l in y:
+        for l in y[-3:]:
             print(l)

@@ -18,6 +18,10 @@ _ICCV 2021_ https://arxiv.org/abs/2105.04459
 Lin Tian, Hastings Greer, Francois-Xavier Vialard, Roland Kwitt, Raúl San José Estépar, Marc Niethammer.  
 _CVPR 2023_ https://arxiv.org/abs/2206.05897
 
+**Inverse Consistency by Construction for Multistep Deep Registration.**
+Hastings Greer, Lin Tian, Francois-Xavier Vialard, Roland Kwitt, Sylvain Bouix, Raul San Jose Estepar, Richard Rushmore and Marc Niethammer.
+_MICCAI 2023_ https://arxiv.org/abs/2305.00087
+
 ## Cite this work
 ```
 @InProceedings{Greer_2021_ICCV,
@@ -38,6 +42,18 @@ _CVPR 2023_ https://arxiv.org/abs/2206.05897
   year={2022}
 }
 ```
+```
+@misc{greer2023inverseconsistencyconstructionmultistep,
+      title={Inverse Consistency by Construction for Multistep Deep Registration}, 
+      author={Hastings Greer and Lin Tian and Francois-Xavier Vialard and Roland Kwitt and Sylvain Bouix and Raul San Jose Estepar and Richard Rushmore and Marc Niethammer},
+      year={2023},
+      eprint={2305.00087},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2305.00087}, 
+}
+```
+
 
 ## uniGradICON and multiGradICON
 
