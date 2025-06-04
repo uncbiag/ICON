@@ -1,0 +1,1 @@
+For detailed commit history on these files, see github.com/uncbiag/equivariant_reg_2/ and specifically the forlder affine_generalization. These files were moved in to the icon_registration pip package once it was clear that the technique works well
