@@ -8,6 +8,7 @@ import icon_registration.config
 import torch
 
 import icon_registration.unicarl.unigradicon_train_parallel
+from icon_registration.unicarl.dataset import reorient
 
 
 def get_model(path=None):
@@ -75,13 +76,7 @@ def quantile(arr: torch.Tensor, q):
     l = len(arr)
     return torch.kthvalue(arr, int(q * l)).values
 
-def reorient(moving):
-        from itk.ITKCommonBasePython import itkSpatialOrientationAdapter
 
-        return itk.orient_image_filter(
-                            moving, 
-                                    desired_coordinate_orientation=itk.ITKCommonBasePython.itkSpatialOrientationEnums.ValidCoordinateOrientations_ITK_COORDINATE_ORIENTATION_RAS,
-                                            use_image_direction=True)
 
 def preprocess(image):
     image = itk.CastImageFilter[type(image), itk.Image[itk.F, 3]].New()(image)

@@ -11,12 +11,15 @@ import itk
 
 def reorient(moving):
     from itk.ITKCommonBasePython import itkSpatialOrientationAdapter
+    desired_coordinate_orientation = itk.ITKCommonBasePython.itkSpatialOrientationEnums.ValidCoordinateOrientations_ITK_COORDINATE_ORIENTATION_RAS
+
+    if hasattr(itk, AnatomicalOrientation):
+        desired_coordinate_orientation = itk.AnatomicalOrientation(desired_coordinate_orientation)
 
     return itk.orient_image_filter(
-        moving,
-        desired_coordinate_orientation=itk.ITKCommonBasePython.itkSpatialOrientationEnums.ValidCoordinateOrientations_ITK_COORDINATE_ORIENTATION_RAS,
-        use_image_direction=True,
-    )
+        moving, 
+        desired_coordinate_orientation=description,
+        use_image_direction=True)
 
 
 class Dataset:
