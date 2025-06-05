@@ -18,7 +18,7 @@ def reorient(moving):
 
     return itk.orient_image_filter(
         moving, 
-        desired_coordinate_orientation=description,
+        desired_coordinate_orientation=desired_coordinate_orientation,
         use_image_direction=True)
 
 
