@@ -30,6 +30,7 @@ class Dataset:
         image_glob: str,
         cache_filename=None,
         maximum_images=None,
+        shuffle=False
     ):
         print(name)
         self.name = name
@@ -39,12 +40,14 @@ class Dataset:
         if not cache_filename:
             self.store = {}
             paths = self.get_image_paths()
+            if shuffle:
+                random.shuffle(paths)
             if maximum_images:
                 paths = paths[:maximum_images]
             for path in tqdm.tqdm(paths):
                 try:
                     self.store[path] = self.preprocess_itk_image(path)
-                except Exception as e:
+                except Exception as e: # (IndexError, ValueError, itk.TemplateTypeError) as e:
                     print(e)
 
             torch.save(
@@ -58,7 +61,8 @@ class Dataset:
             )
         else:
             loaded_cache = torch.load(
-                cache_filename + "/" + self.name + "_cached_dataset.trch"
+                cache_filename + "/" + self.name + "_cached_dataset.trch",
+                weights_only = False
             )
             assert self.name == loaded_cache["name"]
             assert maximum_images == loaded_cache["maximum_images"]
@@ -75,12 +79,12 @@ class Dataset:
     def read_image(self, path: str):
         # import SimpleITK
         # image = SimpleITK.GetArrayFromImage(SimpleITK.ReadImage(path))
-        image = reorient(itk.imread(path))
-        image = itk.GetArrayFromImage(image)
+        itk_image = reorient(itk.imread(path))
+        image = itk.GetArrayFromImage(itk_image)
         image = torch.tensor(image)
         return (
             image,
-            image.GetSpacing()[::-1],
+            np.array(itk_image.GetSpacing())[::-1],
         )  # get spacing metadata shaped like torch shape as
         # early as possible
 
@@ -94,6 +98,7 @@ class Dataset:
         original_type = image.dtype
         image = image[None, None]
         image = torch_crop_foreground(image, additional_crop_pixels=4)
+        original_size = np.array(image.shape)
         image = image.float()
         image = torch.nn.functional.interpolate(
             image, self.input_shape[2:], mode="trilinear"
@@ -106,7 +111,10 @@ class Dataset:
         image = image - im_min
         image = image / (im_max - im_min)
         image = image * 255.0
-        return image.to(torch.uint8)
+
+        spacing = spacing * original_size[2:] / 160.
+
+        return image.to(torch.uint8), spacing
 
     def get_image(self, key: str) -> torch.Tensor:
         """
@@ -119,11 +127,11 @@ class Dataset:
         The images should have their 99th percentile clippe
         d before putting them into the store.
         """
-        unprepped_image = self.store[key]
+        unprepped_image, spacing = self.store[key]
         unprepped_image = unprepped_image.float()
         unprepped_image = unprepped_image - torch.min(unprepped_image)
         unprepped_image = unprepped_image.float() / torch.max(unprepped_image)
-        return unprepped_image  # not really unprepped anymore
+        return unprepped_image, spacing  # not really unprepped anymore
 
     def get_key_pair(self) -> tuple[str, str]:
         """
@@ -236,7 +244,7 @@ class PairedDICOMDataset(PairedDataset):
         if np.any(np.array(image_array.shape) < 20):
             raise ValueError("image too low resolution")
 
-        return image_tensor, image.GetSpacing()[::-1]
+        return image_tensor, np.array(image.GetSpacing())[::-1]
 
 
 def torch_crop_foreground(
@@ -311,3 +319,12 @@ def torch_crop_foreground(
             lower_2 : tensor.shape[3] - upper_2,
             lower_1 : tensor.shape[4] - upper_1,
         ]
+class DiffusionDataset(Dataset):
+    def read_image(self, path:str):
+        import SimpleITK
+        itk_image = SimpleITK.ReadImage(path)
+        image = SimpleITK.GetArrayFromImage(itk_image)
+        image = torch.tensor(image)
+        spacing = np.array((1, 1, 1))
+        print(spacing)
+        return image[0], spacing
