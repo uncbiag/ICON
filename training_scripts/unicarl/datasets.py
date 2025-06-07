@@ -16,13 +16,12 @@ public = False
 
 datasets_ = []
 
-datasets = lambda: None
-
-datasets.append = lambda x: None
+#datasets = lambda: None
+#datasets.append = lambda x: None
 
 maximum_images=1000
 
-cache_filename = None
+cache_filename = "results/unicarl_private/"
 
 datasets_.append(dataset.PairedDataset(input_shape, "HAN-Seg", 
     "/playpen-raid1/Data/HaN-Seg/HaN-Seg/set_1/case_??/case_??_IMG_*.nrrd", match_regex=r"/(case_[0-9]*)/", maximum_images=maximum_images, cache_filename=cache_filename) )
@@ -43,7 +42,7 @@ if (not public):
     datasets_.append(dataset.Dataset(           input_shape, "translucence", "/playpen-raid1/tgreer/mouse_brain_translucence/data/auto_files_resampled/*", cache_filename=cache_filename, maximum_images=maximum_images))
 datasets_.append(dataset.Dataset(           input_shape, "abdomen8k", "/data/hastings/Abdomen8k/AbdomenAtlas/*/ct.nii.gz", maximum_images=maximum_images, cache_filename=cache_filename, shuffle=True))
 datasets_.append(dataset.PairedDICOMDataset(input_shape, "DukeLivers", "/playpen-raid1/Data/DukeLivers/Segmentation/Segmentation/*/*/images/", maximum_images=maximum_images, match_regex=r"Segmentation/([0-9]+)/", cache_filename=cache_filename))
-datasets_.append(dataset.Dataset(           input_shape, "TotalSegmentatorMRI", "/playpen-raid1/soumitri/data/TotalSegMRI/*/*/mri.nii.gz", maximum_images=maximum_images, cache_filename=cache_filename))
+#datasets_.append(dataset.Dataset(           input_shape, "TotalSegmentatorMRI", "/playpen-raid1/soumitri/data/TotalSegMRI/*/*/mri.nii.gz", maximum_images=maximum_images, cache_filename=cache_filename))
 datasets_.append(dataset.PairedDataset(     input_shape, "bratsreg", "/playpen-raid2/Data/BraTS-Reg/BraTSReg_Training_Data_v3/*/*.nii.gz", maximum_images=maximum_images, cache_filename=cache_filename, match_regex=r"v3/(BraTSReg_[0-9]+)/"))
 datasets_.append(dataset.Dataset(           input_shape, "abdomen1k", "/playpen-raid2/Data/AbdomenCT-1K/AbdomenCT-1K-ImagePart*/Case_*", maximum_images=maximum_images, cache_filename=cache_filename, shuffle=True))
 datasets_.append(dataset.Dataset(           input_shape, "fmost", "/playpen-raid2/Data/fMost/subject/*_red_mm_RSA.nii.gz", maximum_images=maximum_images, cache_filename=cache_filename))
@@ -57,7 +56,7 @@ import torch.nn.functional as F
 
 def zoom_3d_image(image, zoom):
    """zoom: numpy array [zoom_x, zoom_y, zoom_z]"""
-   print(image.shape)
+   #print(image.shape)
    batch_size = image.shape[0]
    
    theta = torch.tensor([
@@ -67,7 +66,7 @@ def zoom_3d_image(image, zoom):
    ], dtype=image.dtype, device=image.device).unsqueeze(0).repeat(batch_size, 1, 1)
    
    grid = F.affine_grid(theta, image.size(), align_corners=False)
-   print(grid.shape)
+   #print(grid.shape)
    return F.grid_sample(image, grid, align_corners=False, mode='bilinear')
 
 
@@ -82,12 +81,11 @@ if __name__ == "__main__":
             pair[1] = zoom_3d_image(pair[1], spacing_ratio)
         
 
-            print(spacing_ratio)
             plt.imshow(torch.cat(pair, dim=2)[0, 0, :, :, 50].cpu())
             footsteps.plot("-_____________________________" + d.name)
-            plt.imshow(torch.max(torch.cat(pair, dim=2), dim=4).values[0, 0].cpu())
-            footsteps.plot(d.name)
-            plt.imshow(torch.cat(pair, dim=2)[0, 0, :, 50].cpu())
-            footsteps.plot(d.name)
-            plt.imshow(torch.cat(pair, dim=4)[0, 0, 50].cpu())
-            footsteps.plot(d.name)
+            #plt.imshow(torch.max(torch.cat(pair, dim=2), dim=4).values[0, 0].cpu())
+            #footsteps.plot(d.name)
+            #plt.imshow(torch.cat(pair, dim=2)[0, 0, :, 50].cpu())
+            #footsteps.plot(d.name)
+            #plt.imshow(torch.cat(pair, dim=4)[0, 0, 50].cpu())
+            #footsteps.plot(d.name)

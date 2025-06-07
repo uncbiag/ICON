@@ -1,7 +1,3 @@
-#python3 -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=152.2.132.93 --master_port=1232 unigradicon_train_parallel.py                                         
-
-
-
 from datetime import datetime
 from icon_registration.config import device
 import icon_registration.unicarl.fixed_point_carl as fpc
@@ -19,11 +15,17 @@ import torch.nn.functional as F
 import torchvision.utils
 import os
 os.environ["OMP_NUM_THREADS"]="8"
+BATCH_SIZE=4
+
 
 class RandomMatrix(icon.RegistrationModule):
+    def __init__(self, rotation_scale=.1, shear_stretch_scale=.1):
+        super().__init__()
+        self.rotation_scale = rotation_scale
+        self.shear_stretch_scale=shear_stretch_scale
     def forward(self, a, b):
         if len(a.shape) == 4:
-            noise = torch.randn(a.shape[0], 2, 2) * 13
+            noise = torch.randn(a.shape[0], 2, 2) * rotation_scale
             noise = noise - noise.permute([0, 2, 1])
             noise = torch.linalg.matrix_exp(noise)
             noise = torch.cat([noise, torch.zeros(a.shape[0], 2, 1)], axis=2).to(
@@ -46,14 +48,14 @@ class RandomMatrix(icon.RegistrationModule):
             )
             return x
         elif len(a.shape) == 5:
-            noise = torch.randn(a.shape[0], 3, 3) * .1
+            noise = torch.randn(a.shape[0], 3, 3) * self.rotation_scale
             noise = noise - noise.permute([0, 2, 1])
             noise = torch.linalg.matrix_exp(noise)
             noise = torch.cat([noise, torch.zeros(a.shape[0], 3, 1)], axis=2).to(
                 a.device
             )
             x = noise
-            x = x + torch.randn(x.shape, device=x.device) * .15
+            x = x + torch.randn(x.shape, device=x.device) * self.shear_stretch_scale
             x = torch.cat(
                 [
                     x,
@@ -105,7 +107,7 @@ class SquaredLNCC(icon.losses.LNCC):
 
 
 input_shape = [1, 1, 160, 160, 160]
-def make_net(dimension, input_shape, equivariantize=True):
+def make_net(dimension, input_shape, equivariantize=True, rm=RandomMatrix()):
     if equivariantize:
         unet = fpc.Equivariantize(fpc.SomeDownsampleNoDilationNet(dimension=dimension))
     else:
@@ -139,25 +141,31 @@ def make_net(dimension, input_shape, equivariantize=True):
     net = icon.losses.GradientICONSparse(ts, SquaredLNCC(sigma=4), lmbda=1.5)
     #net = icon.losses.DiffusionRegularizedNet(ts, icon.losses.SquaredLNCC(sigma=4), lmbda=10)
     net.assign_identity_map(input_shape)
-    net = augmentify(net, rm=RandomMatrix())
+    net = augmentify(net, rm=rm)
     net.assign_identity_map(input_shape)
     net.train()
     return net
 
 
-def make_make_pair():
+def make_make_pair(datasets):
 
     def make_pair():
         image_A = []
         image_B = []
+        spacing_A = []
+        spacing_B = []
         for i in range(BATCH_SIZE):
             ds = random.choice(datasets.datasets_)
             pair = ds.get_pair()
-            image_A.append(pair[0])
-            image_B.append(pair[1])
+            image_A.append(pair[0][0])
+            image_B.append(pair[1][0])
+            spacing_A.append(torch.tensor(pair[0][1][None]))
+            spacing_B.append(torch.tensor(pair[1][1][None]))
         image_A = torch.cat(image_A)
         image_B = torch.cat(image_B)
-        return image_A, image_B
+        spacing_A = torch.cat(spacing_A)
+        spacing_B = torch.cat(spacing_B)
+        return image_A, image_B, spacing_A, spacing_B
     return make_pair
 from icon_registration.train import to_floats, write_stats
 
@@ -202,7 +210,6 @@ def train_batchfunction(
     ddp_model.train()
 
 
-    visualization_moving, visualization_fixed = [m[:8].to(device) for m in make_batch()]
 
     optimizer = torch.optim.Adam(ddp_model.parameters(), lr=0.00002)
 
@@ -210,7 +217,7 @@ def train_batchfunction(
 
     for iteration in range(0, steps):
         optimizer.zero_grad()
-        moving_image, fixed_image = make_batch()
+        moving_image, fixed_image, moving_spacing, fixed_spacing = make_batch()
         loss_object = ddp_model(moving_image.to(device), fixed_image.to(device))
         loss = torch.mean(loss_object.all_loss)
         loss.backward()
@@ -229,6 +236,7 @@ def train_batchfunction(
                     footsteps.output_dir + "network_weights_" + str(iteration),
                 )
         if iteration % 300 == 0:
+            visualization_moving, visualization_fixed = [m[:8].to(device) for m in make_batch()[:2]]
             ddp_model.eval()
             print("val (from train set)")
             warped = []
@@ -269,20 +277,4 @@ def train_batchfunction(
                 )
 
 
-
-if __name__ == "__main__":
-
-    import datasets
-
-    net = make_net(3, input_shape, False)
-    #net.regis_net.load_state_dict(torch.load("/playpen-raid1/tgreer/equivariant_reg_2/affine_generalization/results/parallel no-_rotation/network_weights_230000"))
-    #net.regis_net = net.regis_net.netPsi.netPsi
-
-    BATCH_SIZE = 4
-
-    train_batchfunction(
-        net,
-        make_make_pair(),
-        steps=450000
-    )
 
