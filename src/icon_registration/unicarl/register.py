@@ -84,7 +84,7 @@ def preprocess(image):
 
 
 
-    image = itk_crop_foreground(image, additional_crop_pixels=9)
+    image = itk_crop_foreground(image, additional_crop_pixels=3)
     min_ = quantile(torch.tensor(np.array(image)), .01).item()
     max_ = quantile(torch.tensor(np.array(image)), .99).item()
     image = itk.clamp_image_filter(image, Bounds=(min_, max_))
