@@ -280,12 +280,13 @@ def create_itk_transform(phi, ident, image_A, image_B) -> "itk.CompositeTransfor
 
 def resampling_transform(image, shape):
 
+    ndim = len(shape)
     imageType = itk.template(image)[0][itk.template(image)[1]]
 
     dummy_image = itk.image_from_array(
         np.zeros(tuple(reversed(shape)), dtype=itk.array_from_image(image).dtype)
     )
-    if len(shape) == 2:
+    if ndim == 2:
         transformType = itk.MatrixOffsetTransformBase[itk.D, 2, 2]
     else:
         transformType = itk.VersorRigid3DTransform[itk.D]
@@ -298,7 +299,7 @@ def resampling_transform(image, shape):
     initializer.SetTransform(transform)
     initializer.InitializeTransform()
 
-    if len(shape) == 3:
+    if ndim == 3:
         transformType = itk.CenteredAffineTransform[itk.D, 3]
         t2 = transformType.New()
         t2.SetCenter(transform.GetCenter())
@@ -309,12 +310,13 @@ def resampling_transform(image, shape):
 
     input_shape = image.GetLargestPossibleRegion().GetSize()
 
-    for i in range(len(shape)):
+    for i in range(ndim):
 
         m_a[i, i] = image.GetSpacing()[i] * (input_shape[i] / shape[i])
 
     m_a = itk.array_from_matrix(image.GetDirection()) @ m_a
 
+    transform = itk.AffineTransform[itk.D, ndim].New()
     transform.SetMatrix(itk.matrix_from_array(m_a))
 
     return transform
