@@ -316,7 +316,9 @@ def resampling_transform(image, shape):
 
     m_a = itk.array_from_matrix(image.GetDirection()) @ m_a
 
-    transform = itk.AffineTransform[itk.D, ndim].New()
     transform.SetMatrix(itk.matrix_from_array(m_a))
 
-    return transform
+    affine = itk.AffineTransform[itk.D, ndim].New()
+    affine.SetOffset(transform.GetOffset())
+    affine.SetMatrix(transform.GetMatrix())
+    return affine
