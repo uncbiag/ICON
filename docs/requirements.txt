@@ -1,0 +1,4 @@
+monai
+sphinx-tabs
+sphinx-copybutton
+sphinx-rtd-theme
