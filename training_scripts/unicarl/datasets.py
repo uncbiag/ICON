@@ -21,20 +21,23 @@ datasets_ = []
 
 # Common kwargs for all datasets
 dataset_kwargs = {
-    'maximum_images': 1000,
-    'cache_filename': "results/unicarl_private/",
+    'maximum_images': 10000000000,
+    'cache_filename': None,
     'world_size': int(os.environ.get("WORLD_SIZE", 1)),
     'world_rank': int(os.environ.get("RANK", 0)),
-    'shard_threshold': 5000,
+    'shard_threshold': 500,
 }
 
+datasets_.append(dataset.DICOMDataset(input_shape, "Pediatric-CT-Seg", "/playpen-raid1/Data/Pediatric-CT-SEG/*/*/*-CT*/", **dataset_kwargs))
+datasets_.append(dataset.PairedDataset(input_shape, "anatomix", 
+    "/playpen-raid1/tgreer/anatomix/anatomix/synthetic-data-generation/synthesized_views/view*/*Z.nii.gz", match_regex=r"([0-9A-Z]+).nii.gz", **dataset_kwargs) )
 datasets_.append(dataset.PairedDataset(input_shape, "HAN-Seg",
     "/playpen-raid1/Data/HaN-Seg/HaN-Seg/set_1/case_??/case_??_IMG_*.nrrd", match_regex=r"/(case_[0-9]*)/", **dataset_kwargs) )
 datasets_.append(dataset.DiffusionDataset(          input_shape, "ebrahim-diffusion", "/playpen-raid1/tgreer/ebrahim_brains/data/degree_powers_normalized_dipy/degree_power_images/*", **dataset_kwargs))
-datasets_.append(dataset.PairedDICOMDataset(input_shape, "CPTAC-UCEC", "/playpen-raid1/Data/TCIA_CPTAC-UCEC/manifest-1712342731330/CPTAC-UCEC/*/*/*/", match_regex=r"/(C3[NL]-[0-9]*)/", maximum_images=4000, **dataset_kwargs) )
-datasets_.append(dataset.PairedDICOMDataset(input_shape, "TCIA-hastings", "/playpen-raid1/Data/TCIA_Hastings_custom_mrct/manifest-1743108366953/*/*/*/*/", match_regex=r"66953/[a-zA-Z\-]*/([A-Z0-9\-]+)/", maximum_images=4000, **dataset_kwargs))
+datasets_.append(dataset.PairedDICOMDataset(input_shape, "CPTAC-UCEC", "/playpen-raid1/Data/TCIA_CPTAC-UCEC/manifest-1712342731330/CPTAC-UCEC/*/*/*/", match_regex=r"/(C3[NL]-[0-9]*)/", **dataset_kwargs) )
+datasets_.append(dataset.PairedDICOMDataset(input_shape, "TCIA-hastings", "/playpen-raid1/Data/TCIA_Hastings_custom_mrct/manifest-1743108366953/*/*/*/*/", match_regex=r"66953/[a-zA-Z\-]*/([A-Z0-9\-]+)/", **dataset_kwargs))
 datasets_.append(dataset.PairedDICOMDataset(input_shape, "CPTAC-Sarcoma",
-    "/playpen-raid1/Data/TCIA-Sarcoma/manifest-MjbMt99Q1553106146386120388/Soft-tissue-Sarcoma/*/*/?.*/", match_regex=r"/(STS_[0-9]*)/", maximum_images=4000, **dataset_kwargs) )
+    "/playpen-raid1/Data/TCIA-Sarcoma/manifest-MjbMt99Q1553106146386120388/Soft-tissue-Sarcoma/*/*/?.*/", match_regex=r"/(STS_[0-9]*)/",  **dataset_kwargs) )
 if (not public):
     datasets_.append(dataset.PairedDataset(     input_shape, "pancreas", "/playpen-raid1/tgreer/pancreatic_cancer_registration/data/*/Processed/*/original_image.nii.gz", **dataset_kwargs, match_regex=r"data/([0-9]+)/Processed/"))
     datasets_.append(dataset.PairedDataset(     input_shape, "dirlab_clamped", "/playpen-raid2/Data/Lung_Registration_clamp_normal_transposed/*/*_img.nii.gz", **dataset_kwargs, match_regex=r'transposed/([a-zA-Z0-9]+)/'))
@@ -54,8 +57,6 @@ datasets_.append(dataset.Dataset(           input_shape, "fmost", "/playpen-raid
 datasets_.append(dataset.Dataset(           input_shape, "oasis", "/playpen-raid2/Data/oasis/OASIS_OAS1_*_MR1/orig.nii.gz", **dataset_kwargs))
 datasets_.append(dataset.Dataset(           input_shape, "lumir", "/playpen-raid1/Data/LUMIR/imagesTr/*", **dataset_kwargs))
 datasets_.append(dataset.PairedDataset(     input_shape, "autoPET", "/playpen1/tgreer/PET/FDG-PET-CT-Lesions/*/*/[PC][TE][Tr]*.nii.gz", match_regex=r"(/PETCT_[0-9a-z]+/)", **dataset_kwargs))
-datasets_.append(dataset.PairedDataset(input_shape, "anatomix", 
-    "/playpen-raid1/tgreer/anatomix/anatomix/synthetic-data-generation/synthesized_views/view*/*Z.nii.gz", match_regex=r"([0-9A-Z]+).nii.gz", maximum_images=8000, **dataset_kwargs) )
 
 import torch.nn.functional as F
 

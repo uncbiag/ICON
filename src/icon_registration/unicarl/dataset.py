@@ -399,3 +399,64 @@ class DiffusionDataset(Dataset):
         spacing = np.array((1, 1, 1))
         print(spacing)
         return image[0], spacing
+
+
+# With apologies, someone better at OOP can refactor this hiearchy into a DAG or some cursed thing to prevent this
+# from being a copy paste of PairedDICOMDataset
+class DICOMDataset(Dataset):
+    def read_image(self, path: str):
+        print(path)
+        """
+      Reads a DICOM series from a directory path and returns it as a tensor.
+      
+      Args:
+         path (str): Directory containing DICOM files
+            e.g., "files/image342/"
+      
+      Returns:
+         torch.Tensor: 3D tensor containing the DICOM volume
+      """
+        # import SimpleITK as sitk
+        import os
+
+        namesGenerator = itk.GDCMSeriesFileNames.New()
+        namesGenerator.SetUseSeriesDetails(True)
+        namesGenerator.SetDirectory(path)
+        seriesUID = namesGenerator.GetSeriesUIDs()
+
+        dicom_files = namesGenerator.GetFileNames(seriesUID[0])
+
+        # Read the DICOM series as a 3D image
+        reader = itk.ImageSeriesReader[itk.Image[itk.SS, 3]].New()
+        dicomIO = itk.GDCMImageIO.New()
+        reader.SetImageIO(dicomIO)
+        reader.SetFileNames(dicom_files)
+        reader.Update()
+        image = reader.GetOutput()
+        image = reorient(image)
+
+        if (
+            "ITK_non_uniform_sampling_deviation"
+            in image.GetMetaDataDictionary().GetKeys()
+        ):
+            spacing_deviation = image.GetMetaDataDictionary().Get(
+                "ITK_non_uniform_sampling_deviation"
+            )
+            spacing_deviation = (
+                itk.MetaDataObject[itk.D]
+                .cast(spacing_deviation)
+                .GetMetaDataObjectValue()
+            )
+
+            if spacing_deviation > 5:
+                raise ValueError("image has non-uniform-spacing: likely a mish-mash")
+
+        # Convert to tensor
+        image_array = itk.GetArrayFromImage(image)
+
+        image_tensor = torch.tensor(image_array)
+
+        if np.any(np.array(image_array.shape) < 20):
+            raise ValueError("image too low resolution")
+
+        return image_tensor, np.array(image.GetSpacing())[::-1]
