@@ -29,6 +29,17 @@ if __name__ == "__main__":
 
     net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, input_shape, False)
 
+    
+
+    import os
+
+    world_rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+
+    datasets.datasets_= datasets.datasets_[local_rank::4]
+
+    [d.load_cache() for d in datasets.datasets_]
+
     BATCH_SIZE = 4
 
     icon_registration.unicarl.unigradicon_train_parallel.train_batchfunction(

@@ -30,12 +30,17 @@ class Dataset:
         image_glob: str,
         cache_filename=None,
         maximum_images=None,
-        shuffle=False
+        shuffle=False,
+        lazy=True
     ):
         print(name)
         self.name = name
         self.image_glob = image_glob
         self.input_shape = input_shape
+
+        self.cache_filename = cache_filename
+        self.maximum_images = maximum_images
+        self.lazy = lazy
 
         if not cache_filename:
             self.store = {}
@@ -46,8 +51,10 @@ class Dataset:
                 paths = paths[:maximum_images]
             for path in tqdm.tqdm(paths):
                 try:
+
+
                     self.store[path] = self.preprocess_itk_image(path)
-                except Exception as e: # (IndexError, ValueError, itk.TemplateTypeError) as e:
+                except:
                     print(e)
 
             torch.save(
@@ -59,19 +66,24 @@ class Dataset:
                 },
                 footsteps.output_dir + self.name + "_cached_dataset.trch",
             )
+            self.keys = list(self.store.keys())
+            print("Image count: ", len(self.keys))
         else:
+            if not self.lazy:
+                self.load_cache()
+
+    def load_cache(self):
             loaded_cache = torch.load(
-                cache_filename + "/" + self.name + "_cached_dataset.trch",
+                self.cache_filename + "/" + self.name + "_cached_dataset.trch",
                 weights_only = False
             )
             assert self.name == loaded_cache["name"]
-            assert maximum_images == loaded_cache["maximum_images"]
+            assert self.maximum_images == loaded_cache["maximum_images"]
             assert self.image_glob == loaded_cache["image_glob"]
             paths = self.get_image_paths()
             self.store = loaded_cache["store"]
-            # assert(paths[0] in self.store) # sanity check
-        self.keys = list(self.store.keys())
-        print("Image count: ", len(self.keys))
+            self.keys = list(self.store.keys())
+            print("Image count: ", len(self.keys))
 
     def get_image_paths(self) -> [str]:
         return list(glob.glob(self.image_glob))
@@ -155,6 +167,7 @@ class PairedDataset(Dataset):
         cache_filename=None,
         maximum_images=None,
         match_regex=None,
+        lazy=True,
     ):
         super().__init__(
             input_shape,
@@ -162,7 +175,15 @@ class PairedDataset(Dataset):
             image_glob,
             cache_filename=cache_filename,
             maximum_images=maximum_images,
+            lazy=lazy,
         )
+        self.match_regex = match_regex
+        if not lazy:
+            self.load_cache()
+
+    def load_cache(self):
+        super().load_cache()
+        match_regex = self.match_regex
         if match_regex == None:
             raise NotImplementedError()
 
