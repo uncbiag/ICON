@@ -12,7 +12,7 @@ import os
 
 input_shape = (1, 1, 160, 160, 160)
 
-public = False
+public = True
 
 datasets_ = []
 
@@ -22,15 +22,19 @@ datasets_ = []
 # Common kwargs for all datasets
 dataset_kwargs = {
     'maximum_images': 10000000000,
-    'cache_filename': None,
+    'cache_filename': 'unicarl_public_train/',
     'world_size': int(os.environ.get("WORLD_SIZE", 1)),
     'world_rank': int(os.environ.get("RANK", 0)),
     'shard_threshold': 500,
 }
 
-datasets_.append(dataset.DICOMDataset(input_shape, "Pediatric-CT-Seg", "/playpen-raid1/Data/Pediatric-CT-SEG/*/*/*-CT*/", **dataset_kwargs))
-datasets_.append(dataset.PairedDataset(input_shape, "anatomix", 
+datasets_.append(dataset.PairedDataset(input_shape, "anatomixX", 
+    "/playpen-raid1/tgreer/anatomix/anatomix/synthetic-data-generation/synthesized_views/view*/*X.nii.gz", match_regex=r"([0-9A-Z]+).nii.gz", **dataset_kwargs) )
+datasets_.append(dataset.PairedDataset(input_shape, "anatomixY", 
+    "/playpen-raid1/tgreer/anatomix/anatomix/synthetic-data-generation/synthesized_views/view*/*Y.nii.gz", match_regex=r"([0-9A-Z]+).nii.gz", **dataset_kwargs) )
+datasets_.append(dataset.PairedDataset(input_shape, "anatomixZ", 
     "/playpen-raid1/tgreer/anatomix/anatomix/synthetic-data-generation/synthesized_views/view*/*Z.nii.gz", match_regex=r"([0-9A-Z]+).nii.gz", **dataset_kwargs) )
+datasets_.append(dataset.DICOMDataset(input_shape, "Pediatric-CT-Seg", "/playpen-raid1/Data/Pediatric-CT-SEG/*/*/*-CT*/", **dataset_kwargs))
 datasets_.append(dataset.PairedDataset(input_shape, "HAN-Seg",
     "/playpen-raid1/Data/HaN-Seg/HaN-Seg/set_1/case_??/case_??_IMG_*.nrrd", match_regex=r"/(case_[0-9]*)/", **dataset_kwargs) )
 datasets_.append(dataset.DiffusionDataset(          input_shape, "ebrahim-diffusion", "/playpen-raid1/tgreer/ebrahim_brains/data/degree_powers_normalized_dipy/degree_power_images/*", **dataset_kwargs))
