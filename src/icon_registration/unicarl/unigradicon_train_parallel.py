@@ -25,7 +25,7 @@ class RandomMatrix(icon.RegistrationModule):
         self.shear_stretch_scale=shear_stretch_scale
     def forward(self, a, b):
         if len(a.shape) == 4:
-            noise = torch.randn(a.shape[0], 2, 2) * rotation_scale
+            noise = torch.randn(a.shape[0], 2, 2) * self.rotation_scale
             noise = noise - noise.permute([0, 2, 1])
             noise = torch.linalg.matrix_exp(noise)
             noise = torch.cat([noise, torch.zeros(a.shape[0], 2, 1)], axis=2).to(
