@@ -5,4 +5,4 @@ tqdm
 matplotlib
 footsteps>=0.1.6
 itk>=5.3a
-girder_client==3.1.8
+girder_client>=3.1.8
