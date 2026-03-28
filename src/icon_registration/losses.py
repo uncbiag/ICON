@@ -592,16 +592,17 @@ class LNCC(SimilarityBase):
         I = image_A
         J = image_B
         assert I.shape == J.shape, "The shape of image I and J should be the same."
-        
+
         if mask_B is not None:
             assert mask_B.shape == J.shape, "The shape of mask and J should be the same."
-        
+
         lncc = self.calculate_lncc(I, J)
-        
+
         if mask_B is not None:
             mask = mask_B.clone()
             mask[mask != 0] = 1
             lncc = lncc * mask
+            return 1 - torch.sum(lncc) / torch.clamp(torch.sum(mask), min=1)
 
         return 1 - torch.mean(lncc)
 
@@ -610,17 +611,18 @@ class SquaredLNCC(LNCC):
         I = image_A
         J = image_B
         assert I.shape == J.shape, "The shape of image I and J should be the same."
-        
+
         if mask_B is not None:
             assert mask_B.shape == J.shape, "The shape of mask and J should be the same."
-        
+
         lncc = self.calculate_lncc(I, J)
-        
+
         if mask_B is not None:
             mask = mask_B.clone()
             mask[mask != 0] = 1
             lncc = lncc * mask
-            
+            return 1 - torch.sum(lncc**2) / torch.clamp(torch.sum(mask), min=1)
+
         return 1 - torch.mean(lncc**2)
 
 class LNCCOnlyInterpolated(SimilarityBase):
@@ -824,7 +826,8 @@ class MINDSSC(SimilarityBase):
 
             mask = mask.expand(-1, difference.shape[1], -1, -1, -1)
             difference = difference * mask
-            
+            return torch.sum(difference ** 2) / torch.clamp(torch.sum(mask), min=1)
+
         return torch.mean(difference ** 2)
 
 def flips(phi, in_percentage=False):
