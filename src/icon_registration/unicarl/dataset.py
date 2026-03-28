@@ -30,48 +30,88 @@ class Dataset:
         image_glob: str,
         cache_filename=None,
         maximum_images=None,
-        shuffle=False
+        shuffle=False,
+        world_size=1,
+        world_rank=0,
+        shard_threshold=5000
     ):
         print(name)
         self.name = name
         self.image_glob = image_glob
         self.input_shape = input_shape
+        self.world_size = world_size
+        self.world_rank = world_rank
+        self.shard_threshold = shard_threshold
 
         if not cache_filename:
             self.store = {}
-            paths = self.get_image_paths()
+            all_paths = self.get_image_paths()
             if shuffle:
-                random.shuffle(paths)
+                random.shuffle(all_paths)
             if maximum_images:
-                paths = paths[:maximum_images]
+                all_paths = all_paths[:maximum_images]
+
+            # Let subclass decide which paths to keep for this rank
+            paths = self._select_paths_for_rank(all_paths)
+
             for path in tqdm.tqdm(paths):
                 try:
                     self.store[path] = self.preprocess_itk_image(path)
                 except Exception as e: # (IndexError, ValueError, itk.TemplateTypeError) as e:
                     print(e)
 
+            cache_suffix = self._get_cache_suffix()
             torch.save(
                 {
                     "name": self.name,
                     "image_glob": self.image_glob,
                     "maximum_images": maximum_images,
                     "store": self.store,
+                    "world_size": self.world_size,
+                    "world_rank": self.world_rank,
+                    "shard_threshold": self.shard_threshold,
                 },
-                footsteps.output_dir + self.name + "_cached_dataset.trch",
+                footsteps.output_dir + self.name + cache_suffix + "_cached_dataset.trch",
             )
         else:
-            loaded_cache = torch.load(
-                cache_filename + "/" + self.name + "_cached_dataset.trch",
-                weights_only = False
-            )
-            assert self.name == loaded_cache["name"]
-            assert maximum_images == loaded_cache["maximum_images"]
-            assert self.image_glob == loaded_cache["image_glob"]
-            paths = self.get_image_paths()
+            cache_suffix = self._get_cache_suffix()
+            cache_path = cache_filename + "/" + self.name + cache_suffix + "_cached_dataset.trch"
+            loaded_cache = torch.load(cache_path, weights_only=False)
+
+            # Validate cache metadata
+            assert self.name == loaded_cache["name"], f"Dataset name mismatch: {self.name} != {loaded_cache['name']}"
+            assert self.image_glob == loaded_cache["image_glob"], f"Image glob mismatch for {self.name}"
+
+            # Validate distributed configuration matches
+            cached_world_size = loaded_cache.get("world_size")
+            cached_world_rank = loaded_cache.get("world_rank")
+            if cached_world_size != self.world_size or cached_world_rank != self.world_rank:
+                raise ValueError(
+                    f"Cache distributed config mismatch for {self.name}: "
+                    f"expected (world_size={self.world_size}, rank={self.world_rank}), "
+                    f"got (world_size={cached_world_size}, rank={cached_world_rank})"
+                )
+
+            # Load the preprocessed store (no need to re-glob original files)
             self.store = loaded_cache["store"]
-            # assert(paths[0] in self.store) # sanity check
         self.keys = list(self.store.keys())
-        print("Image count: ", len(self.keys))
+        if self.world_size > 1:
+            print(f"Image count: {len(self.keys)} (rank {self.world_rank}/{self.world_size})")
+        else:
+            print(f"Image count: {len(self.keys)}")
+
+    def _get_cache_suffix(self):
+        """Generate cache filename suffix based on distributed config"""
+        if self.world_size <= 1:
+            return ""
+        return f"_rank{self.world_rank}_of_{self.world_size}"
+
+    def _select_paths_for_rank(self, all_paths):
+        """Select which paths this rank should process. Override in subclasses for custom sharding logic."""
+        should_shard = self.world_size > 1 and len(all_paths) > self.shard_threshold
+        if should_shard:
+            return all_paths[self.world_rank::self.world_size]
+        return all_paths
 
     def get_image_paths(self) -> [str]:
         return list(glob.glob(self.image_glob))
@@ -155,17 +195,29 @@ class PairedDataset(Dataset):
         cache_filename=None,
         maximum_images=None,
         match_regex=None,
+        world_size=1,
+        world_rank=0,
+        shard_threshold=5000,
     ):
+        if match_regex == None:
+            raise NotImplementedError()
+
+        # Store match_regex BEFORE calling super().__init__()
+        # so it's available in _select_paths_for_rank()
+        self.match_regex = match_regex
+
         super().__init__(
             input_shape,
             name,
             image_glob,
             cache_filename=cache_filename,
             maximum_images=maximum_images,
+            world_size=world_size,
+            world_rank=world_rank,
+            shard_threshold=shard_threshold,
         )
-        if match_regex == None:
-            raise NotImplementedError()
 
+        # Build pair lookup from store
         self.pair_lookup = collections.defaultdict(lambda: [])
         self.pair_keys = {}
 
@@ -175,6 +227,25 @@ class PairedDataset(Dataset):
             self.pair_lookup[pair_key].append(key)
         # for pair_key in self.pair_lookup.keys():
         #    assert len(self.pair_lookup[pair_key]) != 1 , f"{self.pair_lookup[pair_key]}"
+
+    def _select_paths_for_rank(self, all_paths):
+        """Shard by groups/patients instead of individual images to keep pairs together."""
+        should_shard = self.world_size > 1 and len(all_paths) > self.shard_threshold
+        if not should_shard:
+            return all_paths
+
+        groups = collections.defaultdict(list)
+        for path in all_paths:
+            group_id = regex.search(self.match_regex, path).group(1)
+            groups[group_id].append(path)
+
+        group_ids = sorted(groups.keys())
+        my_groups = group_ids[self.world_rank::self.world_size]
+
+        my_paths = []
+        for group_id in my_groups:
+            my_paths.extend(groups[group_id])
+        return my_paths
 
     def get_key_pair(self):
         image_key_1 = random.choice(self.keys)
@@ -328,3 +399,64 @@ class DiffusionDataset(Dataset):
         spacing = np.array((1, 1, 1))
         print(spacing)
         return image[0], spacing
+
+
+# With apologies, someone better at OOP can refactor this hiearchy into a DAG or some cursed thing to prevent this
+# from being a copy paste of PairedDICOMDataset
+class DICOMDataset(Dataset):
+    def read_image(self, path: str):
+        print(path)
+        """
+      Reads a DICOM series from a directory path and returns it as a tensor.
+      
+      Args:
+         path (str): Directory containing DICOM files
+            e.g., "files/image342/"
+      
+      Returns:
+         torch.Tensor: 3D tensor containing the DICOM volume
+      """
+        # import SimpleITK as sitk
+        import os
+
+        namesGenerator = itk.GDCMSeriesFileNames.New()
+        namesGenerator.SetUseSeriesDetails(True)
+        namesGenerator.SetDirectory(path)
+        seriesUID = namesGenerator.GetSeriesUIDs()
+
+        dicom_files = namesGenerator.GetFileNames(seriesUID[0])
+
+        # Read the DICOM series as a 3D image
+        reader = itk.ImageSeriesReader[itk.Image[itk.SS, 3]].New()
+        dicomIO = itk.GDCMImageIO.New()
+        reader.SetImageIO(dicomIO)
+        reader.SetFileNames(dicom_files)
+        reader.Update()
+        image = reader.GetOutput()
+        image = reorient(image)
+
+        if (
+            "ITK_non_uniform_sampling_deviation"
+            in image.GetMetaDataDictionary().GetKeys()
+        ):
+            spacing_deviation = image.GetMetaDataDictionary().Get(
+                "ITK_non_uniform_sampling_deviation"
+            )
+            spacing_deviation = (
+                itk.MetaDataObject[itk.D]
+                .cast(spacing_deviation)
+                .GetMetaDataObjectValue()
+            )
+
+            if spacing_deviation > 5:
+                raise ValueError("image has non-uniform-spacing: likely a mish-mash")
+
+        # Convert to tensor
+        image_array = itk.GetArrayFromImage(image)
+
+        image_tensor = torch.tensor(image_array)
+
+        if np.any(np.array(image_array.shape) < 20):
+            raise ValueError("image too low resolution")
+
+        return image_tensor, np.array(image.GetSpacing())[::-1]
