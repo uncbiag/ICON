@@ -15,7 +15,7 @@ def to_floats(stats):
         if isinstance(v, torch.Tensor):
             v = torch.mean(v).cpu().item()
         out.append(v)
-    return ICONLoss(*out)
+    return type(stats)(*out)
 
 
 ICONLoss = namedtuple(

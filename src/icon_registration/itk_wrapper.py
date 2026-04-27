@@ -27,7 +27,7 @@ def finetune_execute(model, image_A, image_B, steps):
         optimizer.step()
     with torch.no_grad():
         loss = model(image_A, image_B)
-    #model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict)
     return loss
 
 
@@ -41,7 +41,7 @@ def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps, segmen
         loss_tuple[0].backward()
         optimizer.step()
     with torch.no_grad():
-        loss =  model(image_A, image_B, mask_A=mask_A, mask_B=mask_B, segmentation_A=segmentation_A, segmentation_B=segmentation_B)
+        loss = model(image_A, image_B, mask_A=mask_A, mask_B=mask_B, segmentation_A=segmentation_A, segmentation_B=segmentation_B)
     model.load_state_dict(state_dict)
     return loss
 
@@ -82,7 +82,6 @@ def register_pair(
     if finetune_steps == None:
         with torch.no_grad():
             loss = model(A_resized, B_resized)
-            print(loss)
     else:
         loss = finetune_execute(model, A_resized, B_resized, finetune_steps)
 
@@ -108,6 +107,9 @@ def register_pair_with_mask(model, image_A, image_B, mask_A=None, mask_B=None, f
 
     assert isinstance(image_A, itk.Image)
     assert isinstance(image_B, itk.Image)
+
+    # send model to cpu or gpu depending on config- auto detects capability
+    model.to(config.device)
 
     A_npy = np.array(image_A)
     B_npy = np.array(image_B)
