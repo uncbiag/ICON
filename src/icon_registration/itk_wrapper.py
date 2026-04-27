@@ -32,7 +32,17 @@ def finetune_execute(model, image_A, image_B, steps, learning_rate):
     return loss
 
 
-def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps, learning_rate, segmentation_A, segmentation_B):
+def finetune_execute_mask(
+    model,
+    image_A,
+    image_B,
+    mask_A,
+    mask_B,
+    segmentation_A,
+    segmentation_B,
+    steps,
+    learning_rate,
+):
     state_dict = copy.deepcopy(model.state_dict())
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     for _ in range(steps):
@@ -163,10 +173,10 @@ def register_pair_with_mask(
             B_resized,
             A_mask_resized,
             B_mask_resized,
+            A_seg_resized,
+            B_seg_resized,
             finetune_steps,
             learning_rate,
-            segmentation_A=A_seg_resized,
-            segmentation_B=B_seg_resized,
         )
 
     # phi_AB and phi_BA are [1, 3, H, W, D] pytorch tensors representing the forward and backward
