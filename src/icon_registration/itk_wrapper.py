@@ -31,7 +31,7 @@ def finetune_execute(model, image_A, image_B, steps):
     return loss
 
 
-def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps, segmentation_A=None, segmentation_B=None):
+def finetune_execute_mask(model, image_A, image_B, mask_A, mask_B, steps, segmentation_A, segmentation_B):
     state_dict = copy.deepcopy(model.state_dict())
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00002)
     for _ in range(steps):
