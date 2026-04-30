@@ -61,6 +61,8 @@ def register_pair(
     model, image_A, image_B, finetune_steps=None, return_artifacts=False, learning_rate=DEFAULT_FINETUNE_LEARNING_RATE
 ) -> "(itk.CompositeTransform, itk.CompositeTransform)":
 
+    assert learning_rate > 0
+
     assert isinstance(image_A, itk.Image)
     assert isinstance(image_B, itk.Image)
 
@@ -120,12 +122,14 @@ def register_pair_with_mask(
     image_B,
     mask_A=None,
     mask_B=None,
-    finetune_steps=None,
-    return_artifacts=False,
-    learning_rate=DEFAULT_FINETUNE_LEARNING_RATE,
     segmentation_A=None,
     segmentation_B=None,
+    finetune_steps=None,
+    learning_rate=DEFAULT_FINETUNE_LEARNING_RATE,
+    return_artifacts=False,
 ):
+
+    assert learning_rate > 0
 
     assert isinstance(image_A, itk.Image)
     assert isinstance(image_B, itk.Image)
@@ -201,6 +205,8 @@ def register_pair_with_mask(
 def register_pair_with_multimodalities(
     model, image_A: list, image_B: list, finetune_steps=None, return_artifacts=False, learning_rate=DEFAULT_FINETUNE_LEARNING_RATE
 ) -> "(itk.CompositeTransform, itk.CompositeTransform)":
+
+    assert learning_rate > 0
 
     assert len(image_A) == len(image_B), "image_A and image_B should have the same number of modalities."
 
