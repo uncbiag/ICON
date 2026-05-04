@@ -95,6 +95,7 @@ def register_pair(
     if finetune_steps == None:
         with torch.no_grad():
             loss = model(A_resized, B_resized)
+            print(loss)
     else:
         loss = finetune_execute(model, A_resized, B_resized, finetune_steps, learning_rate)
 
@@ -170,6 +171,7 @@ def register_pair_with_mask(
     if finetune_steps == None:
         with torch.no_grad():
             loss = model(A_resized, B_resized, mask_A=A_mask_resized, mask_B=B_mask_resized, segmentation_A=A_seg_resized, segmentation_B=B_seg_resized)
+            print(loss)
     else:
         loss = finetune_execute_mask(
             model,
