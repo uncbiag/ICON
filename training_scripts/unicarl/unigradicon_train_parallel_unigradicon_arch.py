@@ -20,6 +20,7 @@ import torchvision.utils
 import os
 import icon_registration.unicarl
 import icon_registration.unicarl.unigradicon_train_parallel
+import unigradicon
 os.environ["OMP_NUM_THREADS"]="8"
 
 if __name__ == "__main__":
@@ -29,7 +30,9 @@ if __name__ == "__main__":
 
     input_shape = [1, 1, 80, 80, 80]
 
-    net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, input_shape, False)
+    net = unigradicon.make_network(input_shape)
+
+    #net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, input_shape, False)
 
     BATCH_SIZE = 12
 

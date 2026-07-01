@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     input_shape = [1, 1, 80, 80, 80]
 
-    net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, input_shape, False)
+    net = icon_registration.unicarl.unigradicon_train_parallel.make_net_no_blur(3, input_shape, False)
 
     BATCH_SIZE = 12
 

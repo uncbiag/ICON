@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     input_shape = [1, 1, 80, 80, 80]
 
-    net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, input_shape, False)
+    net = icon_registration.unicarl.unigradicon_train_parallel.make_net(3, input_shape, True, rm=icon_registration.unicarl.unigradicon_train_parallel.RandomMatrix(rotation_scale=3))
 
     BATCH_SIZE = 12
 

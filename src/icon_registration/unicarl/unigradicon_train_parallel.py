@@ -1,5 +1,6 @@
 from datetime import datetime
 from icon_registration.config import device
+import icon_registration.constricon as cnstr
 import icon_registration.unicarl.fixed_point_carl as fpc
 import footsteps
 import icon_registration as icon
@@ -15,7 +16,7 @@ import torch.nn.functional as F
 import torchvision.utils
 import os
 os.environ["OMP_NUM_THREADS"]="8"
-BATCH_SIZE=4
+BATCH_SIZE=12
 
 
 class RandomMatrix(icon.RegistrationModule):
@@ -105,6 +106,46 @@ class SquaredLNCC(icon.losses.LNCC):
         )
 
 
+def make_net_no_blur(dimension, input_shape, equivariantize=True, rm=RandomMatrix()):
+    if equivariantize:
+        unet = fpc.Equivariantize(fpc.SomeDownsampleNoDilationNet(dimension=dimension))
+    else:
+        unet = fpc.SomeDownsampleNoDilationNet(dimension=dimension)
+
+    ar = fpc.AttentionFeaturizer(unet, dimension=dimension)
+    ts = ar
+
+    ts = icon.network_wrappers.DownsampleNet(ts, dimension)
+    for _ in range(3):
+         ts = icon.TwoStepRegistration(
+             fpc.Blur(ts, 1),
+             #ts,
+             #icon.network_wrappers.DownsampleNet(cnstr.FirstTransform(cnstr.ICONSquaringVelocityField(networks.tallUNet2(dimension=dimension))), dimension)
+             icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension)), dimension)
+         )
+    for _ in range(2):
+         ts = icon.TwoStepRegistration(
+             fpc.Blur(ts, 1),
+             #ts,
+             icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension)), dimension)
+            #carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension))
+         )
+    #ts = icon.network_wrappers.DownsampleNet(ts, dimension)
+    #ts = icon.FunctionFromVectorField(icon.networks.tallUNet2(dimension=dimension))
+
+    #for _ in range(1):
+    #     ts = icon.TwoStepRegistration(
+    #         fpc.Blur(ts, 8),
+    #         #ts,
+    #         carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension))
+    #     )
+    net = icon.losses.GradientICONSparse(ts, SquaredLNCC(sigma=4), lmbda=1.5)
+    #net = icon.losses.DiffusionRegularizedNet(ts, icon.losses.SquaredLNCC(sigma=4), lmbda=10)
+    net.assign_identity_map(input_shape)
+    net = augmentify(net, rm=rm)
+    net.assign_identity_map(input_shape)
+    net.train()
+    return net
 
 input_shape = [1, 1, 160, 160, 160]
 def make_net(dimension, input_shape, equivariantize=True, rm=RandomMatrix()):
@@ -121,6 +162,7 @@ def make_net(dimension, input_shape, equivariantize=True, rm=RandomMatrix()):
          ts = icon.TwoStepRegistration(
              fpc.Blur(ts, 21),
              #ts,
+             #icon.network_wrappers.DownsampleNet(cnstr.FirstTransform(cnstr.ICONSquaringVelocityField(networks.tallUNet2(dimension=dimension))), dimension)
              icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension)), dimension)
          )
     for _ in range(2):
@@ -128,16 +170,17 @@ def make_net(dimension, input_shape, equivariantize=True, rm=RandomMatrix()):
              fpc.Blur(ts, 11),
              #ts,
              icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension)), dimension)
+            #carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension))
          )
-    ts = icon.network_wrappers.DownsampleNet(ts, dimension)
+    #ts = icon.network_wrappers.DownsampleNet(ts, dimension)
     #ts = icon.FunctionFromVectorField(icon.networks.tallUNet2(dimension=dimension))
 
-    for _ in range(1):
-         ts = icon.TwoStepRegistration(
-             fpc.Blur(ts, 8),
-             #ts,
-             carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension))
-         )
+    #for _ in range(1):
+    #     ts = icon.TwoStepRegistration(
+    #         fpc.Blur(ts, 8),
+    #         #ts,
+    #         carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension))
+    #     )
     net = icon.losses.GradientICONSparse(ts, SquaredLNCC(sigma=4), lmbda=1.5)
     #net = icon.losses.DiffusionRegularizedNet(ts, icon.losses.SquaredLNCC(sigma=4), lmbda=10)
     net.assign_identity_map(input_shape)
@@ -162,7 +205,10 @@ def make_make_pair(datasets):
             spacing_A.append(torch.tensor(pair[0][1][None]))
             spacing_B.append(torch.tensor(pair[1][1][None]))
         image_A = torch.cat(image_A)
+        avg_pool = F.avg_pool3d
+        image_A = avg_pool(image_A, 2, ceil_mode=True)
         image_B = torch.cat(image_B)
+        image_B = avg_pool(image_B, 2, ceil_mode=True)
         spacing_A = torch.cat(spacing_A)
         spacing_B = torch.cat(spacing_B)
         return image_A, image_B, spacing_A, spacing_B
