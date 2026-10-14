@@ -574,6 +574,17 @@ def gaussian_blur(tensor, kernel_size, sigma, padding="same"):
 
     return out
 
+def _masked_mean(values, mask):
+    """Average nonzero-mask entries per sample, then average samples equally."""
+    if mask is None:
+        return torch.mean(values)
+
+    included = (mask != 0).expand_as(values)
+    dim_reduce = tuple(range(1, len(values.shape)))
+    counts = torch.sum(included, dim_reduce).clamp_min(1)
+    totals = torch.sum(values * included, dim_reduce, dtype=torch.float32)
+    return torch.mean(totals / counts).to(values.dtype)
+
 class LNCC(SimilarityBase):
     def __init__(self, sigma):
         super().__init__(isInterpolated=False)
@@ -598,12 +609,7 @@ class LNCC(SimilarityBase):
         
         lncc = self.calculate_lncc(I, J)
         
-        if mask_B is not None:
-            mask = mask_B.clone()
-            mask[mask != 0] = 1
-            lncc = lncc * mask
-
-        return 1 - torch.mean(lncc)
+        return 1 - _masked_mean(lncc, mask_B)
 
 class SquaredLNCC(LNCC):
     def __call__(self, image_A, image_B, mask_B=None):
@@ -616,12 +622,7 @@ class SquaredLNCC(LNCC):
         
         lncc = self.calculate_lncc(I, J)
         
-        if mask_B is not None:
-            mask = mask_B.clone()
-            mask[mask != 0] = 1
-            lncc = lncc * mask
-            
-        return 1 - torch.mean(lncc**2)
+        return 1 - _masked_mean(lncc**2, mask_B)
 
 class LNCCOnlyInterpolated(SimilarityBase):
     def __init__(self, sigma):
@@ -819,13 +820,8 @@ class MINDSSC(SimilarityBase):
         
         if mask_B is not None:
             assert mask_B.shape == image_B.shape, "The shape of mask and image_B should be the same."
-            mask = mask_B.clone()
-            mask[mask != 0] = 1
 
-            mask = mask.expand(-1, difference.shape[1], -1, -1, -1)
-            difference = difference * mask
-            
-        return torch.mean(difference ** 2)
+        return _masked_mean(difference ** 2, mask_B)
 
 def flips(phi, in_percentage=False):
     if len(phi.size()) == 5:
