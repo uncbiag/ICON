@@ -1,4 +1,5 @@
 from collections import namedtuple
+import functools
 
 import matplotlib
 import torch
@@ -295,18 +296,18 @@ class GradientICONSparse(network_wrappers.RegistrationModule):
             self.warped_image_A, image_B
         ) + self.similarity(self.warped_image_B, image_A)
 
+        # Same distribution as perturbing the full identity map and then subsampling, but only
+        # draws the noise that is kept, and draws it on the GPU (the full-size CPU randn + copy
+        # took ~0.1 s per step at 160^3)
         if len(self.input_shape) - 2 == 3:
-            Iepsilon = (
-                self.identity_map
-                + 2 * torch.randn(*self.identity_map.shape).to(config.device)
-                / self.identity_map.shape[-1]
-            )[:, :, ::2, ::2, ::2]
+            sparse_identity = self.identity_map[:, :, ::2, ::2, ::2]
         elif len(self.input_shape) - 2 == 2:
-            Iepsilon = (
-                self.identity_map
-                + 2 * torch.randn(*self.identity_map.shape).to(config.device)
-                / self.identity_map.shape[-1]
-            )[:, :, ::2, ::2]
+            sparse_identity = self.identity_map[:, :, ::2, ::2]
+        Iepsilon = (
+            sparse_identity
+            + 2 * torch.randn_like(sparse_identity)
+            / self.identity_map.shape[-1]
+        )
 
         # compute squared Frobenius of Jacobian of icon error
 
@@ -555,7 +556,28 @@ def _get_gaussian_kernel1d(kernel_size, sigma):
     kernel1d = pdf / pdf.sum()
     return kernel1d
 
+@functools.lru_cache(maxsize=None)
+def _pad_blur_matrix(n, kernel_size, sigma, mode, device, dtype):
+    """[n, n] matrix of the 1D map: pad by kernel_size // 2 on each side with `mode`, then
+    convolve with the Gaussian kernel. kernel_size must be odd."""
+    kernel1d = _get_gaussian_kernel1d(kernel_size=kernel_size, sigma=sigma).double()
+    eye = torch.eye(n, dtype=torch.float64)[:, None, :]
+    out = torch.conv1d(F.pad(eye, (kernel_size // 2,) * 2, mode), kernel1d[None, None, :])
+    return out[:, 0, :].T.to(device, dtype).contiguous()
+
+def _blur_axes(x, matrices):
+    # apply matrices[i] along spatial axis i of [B, C, D, H, W]. On GPU this is several times
+    # faster than the equivalent depthwise / single-channel conv3d, and equal up to float rounding.
+    for axis, M in zip((-3, -2, -1), matrices):
+        x = torch.matmul(x.transpose(axis, -1), M.T).transpose(axis, -1)
+    return x
+
 def gaussian_blur(tensor, kernel_size, sigma, padding="same"):
+    if len(tensor.shape) - 2 == 3 and padding == "same" and kernel_size % 2 == 1:
+        return _blur_axes(tensor, [
+            _pad_blur_matrix(n, kernel_size, sigma, "constant", tensor.device, tensor.dtype)
+            for n in tensor.shape[2:]
+        ])
     kernel1d = _get_gaussian_kernel1d(kernel_size=kernel_size, sigma=sigma).to(
         tensor.device, dtype=tensor.dtype
     )
