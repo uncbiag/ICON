@@ -1,16 +1,13 @@
-#python3 -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=152.2.132.95 --master_port=1232 unigradicon_train_parallel_attention.py --encoder replace
+#python3 -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=152.2.132.95 --master_port=1232 unigradicon_train_parallel_attention.py
 
 # Same as unigradicon_train_parallel.py, but the 3 residual 3x3x3 conv blocks of the
 # coordinate-attention encoder (fpc.SomeDownsampleNoDilationNet) are replaced by transformer
-# blocks: self-attention with 3D RoPE, then cross-attention between A and B with no positional
+# blocks (12 of them, width 384: 28.7M encoder params vs the conv encoder's 36.1M):
+# self-attention with 3D RoPE, then cross-attention between A and B with no positional
 # encoding (so each image's features stay translation-equivariant on their own token grid),
 # then an MLP. The conv stem is kept, so its weights load from conv checkpoints.
 # Ported from claudevm/unicarl-attention/train_attention.py.
 #
-# --encoder replace  12 self+cross blocks, width 384: 28.7M encoder params (conv encoder: 36.1M)
-# --encoder self     16 self-attention-only blocks: 28.7M, the matched no-cross-attention control
-# --encoder hybrid   conv blocks, each followed by a zero-initialised attention block;
-#                    identical to the conv model at step 0, for warm starts (--init)
 # --center           subtract per-image channel means before the L2 norm (see JointAttentionFeaturizer)
 
 from datetime import datetime
@@ -77,26 +74,20 @@ class Attention(nn.Module):
 class JointBlock(nn.Module):
     """Self-attention (RoPE) -> cross-attention (no PE, symmetric, shared weights) -> MLP."""
 
-    def __init__(self, dim=fpc.MODEL_DIM, heads=8, cross=True, mlp_ratio=4, zero_init=False):
+    def __init__(self, dim=fpc.MODEL_DIM, heads=8, mlp_ratio=4):
         super().__init__()
         head_dim = dim // heads
-        self.norm1, self.norm3 = nn.LayerNorm(dim), nn.LayerNorm(dim)
-        self.norm2 = nn.LayerNorm(dim) if cross else None
+        self.norm1, self.norm2, self.norm3 = nn.LayerNorm(dim), nn.LayerNorm(dim), nn.LayerNorm(dim)
         self.self_attn = Attention(dim, heads, rope=RoPE3D(head_dim))
-        self.cross_attn = Attention(dim, heads) if cross else None
+        self.cross_attn = Attention(dim, heads)
         self.mlp = nn.Sequential(nn.Linear(dim, mlp_ratio * dim), nn.GELU(), nn.Linear(mlp_ratio * dim, dim))
-        if zero_init:
-            for lin in [self.self_attn.out, self.mlp[-1]] + ([self.cross_attn.out] if cross else []):
-                nn.init.zeros_(lin.weight)
-                nn.init.zeros_(lin.bias)
 
     def forward(self, a, b, pos_a, pos_b):
         a = a + self.self_attn(self.norm1(a), self.norm1(a), pos_a, pos_a)
         b = b + self.self_attn(self.norm1(b), self.norm1(b), pos_b, pos_b)
-        if self.cross_attn is not None:
-            na, nb = self.norm2(a), self.norm2(b)
-            # simultaneous update: swapping (A, B) swaps the outputs, as ICON's symmetry expects
-            a, b = a + self.cross_attn(na, nb), b + self.cross_attn(nb, na)
+        na, nb = self.norm2(a), self.norm2(b)
+        # simultaneous update: swapping (A, B) swaps the outputs, as ICON's symmetry expects
+        a, b = a + self.cross_attn(na, nb), b + self.cross_attn(nb, na)
         a = a + self.mlp(self.norm3(a))
         b = b + self.mlp(self.norm3(b))
         return a, b
@@ -115,38 +106,23 @@ def from_tokens(t, spatial):
 
 class JointAttentionEncoder(fpc.SomeDownsampleNoDilationNet):
     """Encodes A and B together. Subclassing keeps the conv parameter names
-    (convs0, convs.*, batchnorms.*), so conv checkpoints load with strict=False."""
+    (convs0, convs.0), so the stem loads from conv checkpoints with strict=False."""
 
-    def __init__(self, dimension=3, mode="replace", depth=12, cross=True, heads=8, mlp_ratio=4):
+    def __init__(self, dimension=3, depth=12, heads=8, mlp_ratio=4):
         super().__init__(dimension=dimension)
         assert dimension == 3
-        assert mode in ("replace", "hybrid")
-        self.mode = mode
-        if mode == "replace":
-            # keep only the stem (convs0, convs.0); the residual trunk is replaced
-            self.convs = nn.ModuleList([self.convs[0]])
-            self.batchnorms = nn.ModuleList([])
-        else:
-            assert depth == 3, "hybrid interleaves one attention block per residual conv block"
-        self.blocks = nn.ModuleList([
-            JointBlock(fpc.MODEL_DIM, heads, cross=cross, mlp_ratio=mlp_ratio, zero_init=(mode == "hybrid"))
-            for _ in range(depth)
-        ])
+        # keep only the stem (convs0, convs.0); the residual trunk is replaced
+        self.convs = nn.ModuleList([self.convs[0]])
+        self.batchnorms = nn.ModuleList([])
+        self.blocks = nn.ModuleList([JointBlock(fpc.MODEL_DIM, heads, mlp_ratio=mlp_ratio) for _ in range(depth)])
 
     def stem(self, x):
         x = self.avg_pool(self.convs0(x), 2, ceil_mode=True)
         return torch.relu(self.avg_pool(self.convs[0](x), 2, ceil_mode=True))
 
-    def conv_block(self, x, i):
-        x = self.batchnorms[i](x)
-        y = self.convs[i + 7](torch.relu(self.convs[i + 4](torch.relu(self.convs[i + 1](x)))))
-        return x + y
-
     def forward(self, A, B):
         a, b = self.stem(A), self.stem(B)
-        for i, block in enumerate(self.blocks):
-            if self.mode == "hybrid":
-                a, b = self.conv_block(a, i), self.conv_block(b, i)
+        for block in self.blocks:
             ta, pos_a, sa = to_tokens(a)
             tb, pos_b, sb = to_tokens(b)
             ta, tb = block(ta, tb, pos_a, pos_b)
@@ -179,12 +155,9 @@ class JointAttentionFeaturizer(fpc.AttentionFeaturizer):
         return self.registerer(norm(ft_A), self.crop(norm(ft_B)))
 
 
-def make_net(dimension, input_shape, encoder="replace", center=False, rm=utp.RandomMatrix()):
+def make_net(dimension, input_shape, center=False, rm=utp.RandomMatrix()):
     """utp.make_net(dimension, input_shape, False) with the attention encoder."""
-    kwargs = {"replace": dict(mode="replace", depth=12, cross=True),
-              "self": dict(mode="replace", depth=16, cross=False),
-              "hybrid": dict(mode="hybrid", depth=3, cross=True)}[encoder]
-    ts = JointAttentionFeaturizer(JointAttentionEncoder(dimension=dimension, **kwargs), dimension=dimension, center=center)
+    ts = JointAttentionFeaturizer(JointAttentionEncoder(dimension=dimension), dimension=dimension, center=center)
 
     ts = icon.network_wrappers.DownsampleNet(ts, dimension)
     for _ in range(3):
@@ -214,11 +187,10 @@ def make_net(dimension, input_shape, encoder="replace", center=False, rm=utp.Ran
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--encoder", choices=["replace", "self", "hybrid"], default="replace")
     parser.add_argument("--center", action="store_true")
     parser.add_argument("--init", default=None,
-                        help="regis_net checkpoint to start from (strict=False: conv weights fill the stem, "
-                             "or the whole conv encoder in hybrid mode; attention blocks stay fresh)")
+                        help="regis_net checkpoint to start from (strict=False: conv weights fill the stem; "
+                             "attention blocks stay fresh)")
     parser.add_argument("--steps", type=int, default=450000)
     args, rest = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + rest  # train_batchfunction parses --local-rank itself
@@ -226,7 +198,7 @@ if __name__ == "__main__":
     import datasets
     from datasets import input_shape
 
-    net = make_net(3, input_shape, encoder=args.encoder, center=args.center)
+    net = make_net(3, input_shape, center=args.center)
     if args.init:
         missing, unexpected = net.regis_net.load_state_dict(torch.load(args.init, map_location="cpu"), strict=False)
         print(f"--init {args.init}: {len(missing)} new tensors, {len(unexpected)} checkpoint tensors unused")
