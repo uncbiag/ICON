@@ -286,6 +286,14 @@ class AttentionRegistration(icon_registration.RegistrationModule):
 
         self.padding = padding
 
+    def assign_identity_map(self, input_shape, parents_identity_map=None):
+        super().assign_identity_map(input_shape, parents_identity_map)
+        # built once here instead of with numpy on every call, which split torch.compile's
+        # graph at each call (19 graph breaks per training step)
+        self.register_buffer(
+            "padded_identity_map", carl.pad_im(self.identity_map, self.padding), persistent=False
+        )
+
     def torch_attention(self, ft_A, ft_B):
     
 
@@ -322,7 +330,7 @@ class AttentionRegistration(icon_registration.RegistrationModule):
             )
         ft_A = ft_A.permute([0, 1, 3, 2]).contiguous()
         ft_B = ft_B.permute([0, 1, 3, 2]).contiguous()
-        im = carl.pad_im(self.identity_map, self.padding).to(ft_A.device)
+        im = self.padded_identity_map
         x = im.reshape(-1, 1, self.dimension, ft_A.shape[2]).permute(0, 1, 3, 2)
         x = torch.cat([x, x], axis=-1)
         x = torch.cat([x, x], axis=-1)

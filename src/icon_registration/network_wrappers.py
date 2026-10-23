@@ -50,7 +50,9 @@ class RegistrationModule(nn.Module):
     def assign_identity_map(self, input_shape, parents_identity_map=None):
         self.input_shape = np.array(input_shape)
         self.input_shape[0] = 1
-        self.spacing = 1.0 / (self.input_shape[2::] - 1)
+        # python floats, not a numpy array: torch.compile turns a numpy attribute into a CPU tensor
+        # input, which inductor then fuses into CUDA kernels (crash). Every use only indexes it.
+        self.spacing = tuple(float(s) for s in 1.0 / (self.input_shape[2::] - 1))
 
         # if parents_identity_map is not None:
         #    self.identity_map = parents_identity_map
