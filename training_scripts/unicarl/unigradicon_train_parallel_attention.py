@@ -6,14 +6,11 @@
 # self-attention with 3D RoPE, then cross-attention between A and B with no positional
 # encoding (so each image's features stay translation-equivariant on their own token grid),
 # then an MLP. The conv stem is kept, so its weights load from conv checkpoints.
-# Ported from claudevm/unicarl-attention/train_attention.py.
-#
-# --center           subtract per-image channel means before the L2 norm (see JointAttentionFeaturizer)
+# Ported from claudevm/unicarl-attention/train_attention.py (--encoder replace --center).
 
 from datetime import datetime
 from icon_registration.config import device
 import icon_registration.unicarl.fixed_point_carl as fpc
-import argparse
 import footsteps
 import icon_registration as icon
 import icon_registration.carl as carl
@@ -21,7 +18,6 @@ import icon_registration.data
 import icon_registration.networks as networks
 import os
 import random
-import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -134,30 +130,28 @@ class JointAttentionFeaturizer(fpc.AttentionFeaturizer):
     """AttentionFeaturizer whose encoder sees both images at once. Normalisation,
     padding/cropping and the coordinate attention are unchanged.
 
-    center=True subtracts each channel's mean over the tokens of each image before the
-    L2 normalisation: at init the attention trunks give every token almost the same feature,
-    so the coordinate softmax is flat and every point maps to the mean coordinate; centering
-    removes that shared component. The mean is translation-invariant, so equivariance is unaffected."""
-
-    def __init__(self, net, dimension=2, center=False):
-        super().__init__(net, dimension=dimension)
-        self.center = center
+    Each image's features have their per-channel mean (over its tokens) subtracted before
+    the L2 normalisation. Without this, at init the attention trunks give every token almost
+    the same feature (cosine similarity ~1.0 on a real MR/CT pair), so the coordinate softmax
+    is flat and every point maps to the mean coordinate: the first stage collapses the image
+    and the later stages train against a constant warped image. Centered, the start is random
+    but well-spread (cosine ~0.23). The mean is translation-invariant, so equivariance is
+    unaffected, and a component shared by every token carries no correspondence anyway."""
 
     def forward(self, A, B):
         p = self.padding
         pad = lambda x: F.pad(x, [p] * (2 * self.dimension))
         ft_A, ft_B = self.net(pad(A), pad(B))
-        if self.center:
-            spatial = tuple(range(2, 2 + self.dimension))
-            ft_A = ft_A - ft_A.mean(dim=spatial, keepdim=True)
-            ft_B = ft_B - ft_B.mean(dim=spatial, keepdim=True)
+        spatial = tuple(range(2, 2 + self.dimension))
+        ft_A = ft_A - ft_A.mean(dim=spatial, keepdim=True)
+        ft_B = ft_B - ft_B.mean(dim=spatial, keepdim=True)
         norm = lambda x: 4 * x / (0.001 + torch.sqrt(torch.sum(x**2, dim=1, keepdims=True)))
         return self.registerer(norm(ft_A), self.crop(norm(ft_B)))
 
 
-def make_net(dimension, input_shape, center=False, rm=utp.RandomMatrix()):
+def make_net(dimension, input_shape, rm=utp.RandomMatrix()):
     """utp.make_net(dimension, input_shape, False) with the attention encoder."""
-    ts = JointAttentionFeaturizer(JointAttentionEncoder(dimension=dimension), dimension=dimension, center=center)
+    ts = JointAttentionFeaturizer(JointAttentionEncoder(dimension=dimension), dimension=dimension)
 
     ts = icon.network_wrappers.DownsampleNet(ts, dimension)
     for _ in range(3):
@@ -186,27 +180,16 @@ def make_net(dimension, input_shape, center=False, rm=utp.RandomMatrix()):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--center", action="store_true")
-    parser.add_argument("--init", default=None,
-                        help="regis_net checkpoint to start from (strict=False: conv weights fill the stem; "
-                             "attention blocks stay fresh)")
-    parser.add_argument("--steps", type=int, default=450000)
-    args, rest = parser.parse_known_args()
-    sys.argv = [sys.argv[0]] + rest  # train_batchfunction parses --local-rank itself
 
     import datasets
     from datasets import input_shape
 
-    net = make_net(3, input_shape, center=args.center)
-    if args.init:
-        missing, unexpected = net.regis_net.load_state_dict(torch.load(args.init, map_location="cpu"), strict=False)
-        print(f"--init {args.init}: {len(missing)} new tensors, {len(unexpected)} checkpoint tensors unused")
+    net = make_net(3, input_shape)
 
     BATCH_SIZE = 4
 
     utp.train_batchfunction(
         net,
         utp.make_make_pair(datasets),
-        steps=args.steps
+        steps=450000
     )
