@@ -25,6 +25,8 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 import icon_registration.unicarl
 import icon_registration.unicarl.unigradicon_train_parallel as utp
 os.environ["OMP_NUM_THREADS"]="8"
+# every step has the same shapes, so let cuDNN pick the fastest conv algorithms once
+torch.backends.cudnn.benchmark = True
 
 
 class RoPE3D(nn.Module):
