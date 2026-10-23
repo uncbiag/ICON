@@ -22,6 +22,7 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from torch.nn.attention import SDPBackend, sdpa_kernel
 import icon_registration.unicarl
 import icon_registration.unicarl.unigradicon_train_parallel as utp
@@ -129,7 +130,14 @@ class JointAttentionEncoder(fpc.SomeDownsampleNoDilationNet):
         dtype = torch.bfloat16 if torch.cuda.get_device_capability(A.device)[0] >= 8 else torch.float16
         with torch.autocast("cuda", dtype=dtype):
             for block in self.blocks:
-                ta, tb = block(ta, tb, pos_a, pos_b)
+                # Activation checkpointing: the blocks' activations were ~3.9 GiB per sample, the
+                # largest share of training memory (8.4 -> 5.2 GiB per sample, +12% step time on a
+                # Quadro RTX 6000; saving the attention outputs and recomputing the rest was no
+                # faster). No BatchNorm or randomness here, so the result is the same.
+                if torch.is_grad_enabled():
+                    ta, tb = torch.utils.checkpoint.checkpoint(block, ta, tb, pos_a, pos_b, use_reentrant=False)
+                else:
+                    ta, tb = block(ta, tb, pos_a, pos_b)
         return from_tokens(ta.float(), sa), from_tokens(tb.float(), sb)
 
 
@@ -161,6 +169,40 @@ class JointAttentionFeaturizer(fpc.AttentionFeaturizer):
         return self.registerer(norm(ft_A), norm(ft_B))
 
 
+def checkpoint_unet(unet):
+    """Activation checkpointing for a tallUNet2 (~2.3 GiB per sample across the 6 UNets).
+    The recompute in the backward runs the same ops, but its BatchNorm running-statistics update
+    goes to throwaway copies, so outputs, gradients and the running statistics are all as
+    without checkpointing."""
+    batchnorms = [m for m in unet.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+    forward = unet.forward
+
+    def checkpointed(x, y):
+        if not torch.is_grad_enabled():
+            return forward(x, y)
+        calls = []
+
+        def run(x, y):
+            calls.append(None)
+            if len(calls) == 1:
+                return forward(x, y)
+            # same ops as the forward, but the running-statistics update lands on throwaway copies
+            names = ("running_mean", "running_var", "num_batches_tracked")
+            real = [[getattr(bn, n) for n in names] for bn in batchnorms]
+            for bn, buffers in zip(batchnorms, real):
+                for n, b in zip(names, buffers):
+                    setattr(bn, n, b.clone())
+            try:
+                return forward(x, y)
+            finally:
+                for bn, buffers in zip(batchnorms, real):
+                    for n, b in zip(names, buffers):
+                        setattr(bn, n, b)
+        return torch.utils.checkpoint.checkpoint(run, x, y, use_reentrant=False)
+    unet.forward = checkpointed
+    return unet
+
+
 def make_net(dimension, input_shape, rm=utp.RandomMatrix()):
     """utp.make_net(dimension, input_shape, False) with the attention encoder."""
     ts = JointAttentionFeaturizer(JointAttentionEncoder(dimension=dimension), dimension=dimension)
@@ -169,19 +211,19 @@ def make_net(dimension, input_shape, rm=utp.RandomMatrix()):
     for _ in range(3):
          ts = icon.TwoStepRegistration(
              fpc.Blur(ts, 21),
-             icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension)), dimension)
+             icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(checkpoint_unet(networks.tallUNet2(dimension=dimension))), dimension)
          )
     for _ in range(2):
          ts = icon.TwoStepRegistration(
              fpc.Blur(ts, 11),
-             icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension)), dimension)
+             icon.network_wrappers.DownsampleNet(carl.RotationFunctionFromVectorField(checkpoint_unet(networks.tallUNet2(dimension=dimension))), dimension)
          )
     ts = icon.network_wrappers.DownsampleNet(ts, dimension)
 
     for _ in range(1):
          ts = icon.TwoStepRegistration(
              fpc.Blur(ts, 8),
-             carl.RotationFunctionFromVectorField(networks.tallUNet2(dimension=dimension))
+             carl.RotationFunctionFromVectorField(checkpoint_unet(networks.tallUNet2(dimension=dimension)))
          )
     net = icon.losses.GradientICONSparse(ts, utp.SquaredLNCC(sigma=4), lmbda=1.5)
     net.assign_identity_map(input_shape)
