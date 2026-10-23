@@ -131,8 +131,13 @@ class JointAttentionEncoder(fpc.SomeDownsampleNoDilationNet):
 
 
 class JointAttentionFeaturizer(fpc.AttentionFeaturizer):
-    """AttentionFeaturizer whose encoder sees both images at once. Normalisation,
-    padding/cropping and the coordinate attention are unchanged.
+    """AttentionFeaturizer whose encoder sees both images at once. Normalisation and the
+    coordinate attention are unchanged.
+
+    Only A is padded: the coordinate attention needs A's features on the padded grid (so B's
+    points can map outside A's field of view), but crops B's back to the image anyway. Encoding
+    B unpadded (10^3 tokens instead of 18^3) makes the encoder ~2.5x faster; B's tokens just
+    no longer see the zero border as context.
 
     Each image's features have their per-channel mean (over its tokens) subtracted before
     the L2 normalisation. Without this, at init the attention trunks give every token almost
@@ -145,12 +150,12 @@ class JointAttentionFeaturizer(fpc.AttentionFeaturizer):
     def forward(self, A, B):
         p = self.padding
         pad = lambda x: F.pad(x, [p] * (2 * self.dimension))
-        ft_A, ft_B = self.net(pad(A), pad(B))
+        ft_A, ft_B = self.net(pad(A), B)
         spatial = tuple(range(2, 2 + self.dimension))
         ft_A = ft_A - ft_A.mean(dim=spatial, keepdim=True)
         ft_B = ft_B - ft_B.mean(dim=spatial, keepdim=True)
         norm = lambda x: 4 * x / (0.001 + torch.sqrt(torch.sum(x**2, dim=1, keepdims=True)))
-        return self.registerer(norm(ft_A), self.crop(norm(ft_B)))
+        return self.registerer(norm(ft_A), norm(ft_B))
 
 
 def make_net(dimension, input_shape, rm=utp.RandomMatrix()):
