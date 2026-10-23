@@ -35,6 +35,55 @@ def scale_map(map, sz, spacing):
     return map_scaled
 
 
+def _grid_3d(input1, coords, spacing):
+    # scale_map + the channel reordering of STNFunction_ND_BCXYZ.forward_stn, as the
+    # [B, X, Y, Z, 3] grid grid_sample takes, with the same float operations
+    grid = torch.zeros_like(coords).permute([0, 2, 3, 4, 1])
+    for d in range(3):
+        if input1.shape[d + 2] > 1:
+            grid[..., 2 - d] = coords[:, d] * (2.0 / (input1.shape[d + 2] - 1.0) / spacing[d]) - 1.0
+        else:
+            grid[..., 2 - d] = coords[:, d]
+    if grid.shape[0] == 1 and input1.shape[0] != 1:
+        grid = grid.expand(input1.shape[0], -1, -1, -1, -1)
+    return grid
+
+class _Warp3D(torch.autograd.Function):
+    """STNFunction_ND_BCXYZ for 3D with 01 input, saving the coordinates for the backward
+    instead of the scaled, reordered grid copy that grid_sample would save (~1.4 GiB per
+    sample of uniCARL training activations), which is rebuilt in the backward. Calls the same
+    grid_sample kernels on the same values, so forward and gradients are unchanged."""
+
+    @staticmethod
+    def forward(ctx, input1, coords, spacing, mode, padding_mode):
+        ctx.spacing, ctx.mode, ctx.padding_mode = spacing, mode, padding_mode
+        ctx.save_for_backward(input1, coords)
+        return torch.nn.functional.grid_sample(
+            input1, _grid_3d(input1, coords, spacing), mode=mode, padding_mode=padding_mode, align_corners=True
+        )
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input1, coords = ctx.saved_tensors
+        grid = _grid_3d(input1, coords, ctx.spacing)
+        grad_input, grad_grid = torch.ops.aten.grid_sampler_3d_backward(
+            grad_output, input1, grid,
+            {"bilinear": 0, "nearest": 1}[ctx.mode], {"zeros": 0, "border": 1}[ctx.padding_mode], True,
+            [ctx.needs_input_grad[0], ctx.needs_input_grad[1]],
+        )
+        grad_coords = None
+        if ctx.needs_input_grad[1]:
+            if coords.shape[0] == 1 and input1.shape[0] != 1:
+                grad_grid = grad_grid.sum(0, keepdim=True)
+            grad_coords = torch.zeros_like(coords)
+            for d in range(3):
+                if input1.shape[d + 2] > 1:
+                    grad_coords[:, d] = grad_grid[..., 2 - d] * (2.0 / (input1.shape[d + 2] - 1.0) / ctx.spacing[d])
+                else:
+                    grad_coords[:, d] = grad_grid[..., 2 - d]
+        return (grad_input if ctx.needs_input_grad[0] else None), grad_coords, None, None, None
+
+
 class STNFunction_ND_BCXYZ:
     """
     Spatial transform function for 1D, 2D, and 3D. In BCXYZ format (this IS the format used in the current toolbox).
@@ -119,6 +168,8 @@ class STNFunction_ND_BCXYZ:
         """
 
         assert len(self.spacing) + 2 == len(input2.size())
+        if self.using_01_input and self.ndim == 3:
+            return _Warp3D.apply(input1, input2, self.spacing, self.mode, self.zero_boundary)
         if self.using_01_input:
             output = self.forward_stn(
                 input1, scale_map(input2, input1.shape, self.spacing), self.ndim

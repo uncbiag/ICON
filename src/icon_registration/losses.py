@@ -565,12 +565,43 @@ def _pad_blur_matrix(n, kernel_size, sigma, mode, device, dtype):
     out = torch.conv1d(F.pad(eye, (kernel_size // 2,) * 2, mode), kernel1d[None, None, :])
     return out[:, 0, :].T.to(device, dtype).contiguous()
 
-def _blur_axes(x, matrices):
-    # apply matrices[i] along spatial axis i of [B, C, D, H, W]. On GPU this is several times
-    # faster than the equivalent depthwise / single-channel conv3d, and equal up to float rounding.
+def _apply_axes(x, matrices):
+    # apply matrices[i] along spatial axis i of [B, C, D, H, W]
     for axis, M in zip((-3, -2, -1), matrices):
         x = torch.matmul(x.transpose(axis, -1), M.T).transpose(axis, -1)
     return x
+
+class _SeparableLinear(torch.autograd.Function):
+    """y = sum_k coefs[k] * (matrices[k] applied along each spatial axis of x).
+
+    A fixed linear map, so the backward is the transposed map applied to the gradient: nothing
+    is saved but the small matrices. (Plain autograd through the matmuls saves the input of
+    every axis pass, 3 copies of x per separable term.)"""
+
+    @staticmethod
+    def forward(ctx, x, coefs, *matrices):
+        ctx.coefs = coefs
+        ctx.save_for_backward(*matrices)
+        return _combine(x, coefs, matrices, transpose=False)
+
+    @staticmethod
+    def backward(ctx, grad):
+        return (_combine(grad, ctx.coefs, ctx.saved_tensors, transpose=True), None) + (None,) * len(ctx.saved_tensors)
+
+def _combine(x, coefs, matrices, transpose):
+    out = None
+    for k, c in enumerate(coefs):
+        mats = matrices[3 * k: 3 * k + 3]
+        term = _apply_axes(x, [M.T for M in mats] if transpose else mats)
+        term = term if c == 1 else c * term
+        out = term if out is None else out + term
+    return out
+
+def _blur_axes(x, matrices, coefs=(1,)):
+    """sum over k of coefs[k] * (matrices[3k:3k+3] applied along the 3 spatial axes of x). On GPU
+    this is several times faster than the equivalent depthwise / single-channel conv3d, and
+    equal up to float rounding."""
+    return _SeparableLinear.apply(x, tuple(coefs), *matrices)
 
 def gaussian_blur(tensor, kernel_size, sigma, padding="same"):
     if len(tensor.shape) - 2 == 3 and padding == "same" and kernel_size % 2 == 1:

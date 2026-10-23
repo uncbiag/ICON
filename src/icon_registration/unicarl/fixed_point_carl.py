@@ -414,7 +414,7 @@ def even_blur_3d(tensor, sigma):
     kernel_size += 1 - kernel_size%2
     def mats(mode):
         return [_pad_blur_matrix(n, kernel_size, sigma, mode, tensor.device, tensor.dtype) for n in tensor.shape[2:]]
-    return 2 * _blur_axes(tensor, mats("replicate")) - _blur_axes(tensor, mats("reflect"))
+    return _blur_axes(tensor, mats("replicate") + mats("reflect"), coefs=(2, -1))
 
 class Blur(icon.network_wrappers.RegistrationModule):
     def __init__(self, net, radius):
