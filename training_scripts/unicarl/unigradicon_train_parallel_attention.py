@@ -16,6 +16,7 @@ import icon_registration as icon
 import icon_registration.carl as carl
 import icon_registration.data
 import icon_registration.networks as networks
+import inspect
 import os
 import random
 import torch
@@ -196,6 +197,25 @@ if __name__ == "__main__":
     from datasets import input_shape
 
     net = make_net(3, input_shape)
+    # Compile the training forward only; the validation pass every 300 steps (eval mode, batch 1,
+    # and empty batches past BATCH_SIZE) stays eager rather than costing more compiles.
+    # net stays a plain module, so checkpoints and attribute access are unchanged.
+    # Modules whose forward tags their identity_map with .isIdentity (a shortcut ICON checks with
+    # hasattr). Tagging them before each compiled call matches what eager has done by then, and keeps
+    # dynamo's hasattr guards stable: otherwise the eager validation pass adds tags the first compile
+    # did not see, and the training graph recompiles (~5 min).
+    tagging_modules = [m for m in net.modules()
+                       if "identity_map.isIdentity = True" in inspect.getsource(type(m).forward)]
+    compiled_forward = torch.compile(net.forward)
+    eager_forward = net.forward
+
+    def forward(*args):
+        if not net.training:
+            return eager_forward(*args)
+        for m in tagging_modules:
+            m.identity_map.isIdentity = True
+        return compiled_forward(*args)
+    net.forward = forward
 
     BATCH_SIZE = 4
 
