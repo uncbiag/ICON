@@ -1,4 +1,5 @@
-#python3 -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=152.2.132.95 --master_port=1232 unigradicon_train_parallel_attention.py
+# FOOTSTEPS_NAME=<run name> torchrun --standalone --nproc_per_node=4 unigradicon_train_parallel_attention.py
+# (see RUNGUIDE_attention.md; batch 20 per GPU needs ~72 GiB per GPU)
 
 # Same as unigradicon_train_parallel.py, but the 3 residual 3x3x3 conv blocks of the
 # coordinate-attention encoder (fpc.SomeDownsampleNoDilationNet) are replaced by transformer
@@ -18,11 +19,14 @@ import icon_registration.data
 import icon_registration.networks as networks
 import inspect
 import os
+import queue
+import threading
 import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
+import torch._functorch.config
 from torch.nn.attention import SDPBackend, sdpa_kernel
 import icon_registration.unicarl
 import icon_registration.unicarl.unigradicon_train_parallel as utp
@@ -104,6 +108,23 @@ def from_tokens(t, spatial):
     return t.transpose(1, 2).reshape(t.shape[0], t.shape[2], *spatial)
 
 
+# Activation checkpointing of the encoder blocks and UNets: ~3.5 instead of ~8.4 GiB per
+# sample, but ~1/3 slower. Set in __main__ according to the GPU's memory.
+CHECKPOINT = True
+
+
+def _checkpoint(fn, *args):
+    return _checkpoint_eager(fn, *args) if CHECKPOINT else fn(*args)
+
+
+@torch.compiler.disable
+def _checkpoint_eager(fn, *args):
+    # Runs eagerly even inside torch.compile: inductor schedules the recompute of checkpointed
+    # regions inside one big backward graph, which in torch 2.7.1 peaked higher than not
+    # checkpointing at all (batch 4 OOMed on 24 GB).
+    return torch.utils.checkpoint.checkpoint(fn, *args, use_reentrant=False)
+
+
 class JointAttentionEncoder(fpc.SomeDownsampleNoDilationNet):
     """Encodes A and B together. Subclassing keeps the conv parameter names
     (convs0, convs.0), so the stem loads from conv checkpoints with strict=False."""
@@ -135,7 +156,7 @@ class JointAttentionEncoder(fpc.SomeDownsampleNoDilationNet):
                 # Quadro RTX 6000; saving the attention outputs and recomputing the rest was no
                 # faster). No BatchNorm or randomness here, so the result is the same.
                 if torch.is_grad_enabled():
-                    ta, tb = torch.utils.checkpoint.checkpoint(block, ta, tb, pos_a, pos_b, use_reentrant=False)
+                    ta, tb = _checkpoint(block, ta, tb, pos_a, pos_b)
                 else:
                     ta, tb = block(ta, tb, pos_a, pos_b)
         return from_tokens(ta.float(), sa), from_tokens(tb.float(), sb)
@@ -169,36 +190,55 @@ class JointAttentionFeaturizer(fpc.AttentionFeaturizer):
         return self.registerer(norm(ft_A), norm(ft_B))
 
 
+def _unet2_forward_pure(unet, x, y):
+    """networks.UNet2.forward with each BatchNorm applied with batch statistics (what training
+    mode does) and without touching the running statistics; returns those batch statistics
+    instead, so the caller can update the running statistics once. No side effects, so it can
+    be checkpointed (also under torch.compile)."""
+    x = torch.cat([x, y], 1)
+    skips = []
+    stats = []
+    for depth in range(unet.num_layers):
+        skips.append(x)
+        y = unet.downConvs[depth](F.leaky_relu(x))
+        x = y + networks.pad_or_crop(unet.avg_pool(x, 2, ceil_mode=True), y.size(), unet.dimension)
+    for depth in reversed(range(unet.num_layers)):
+        y = unet.upConvs[depth](F.leaky_relu(x))
+        x = y + F.interpolate(
+            networks.pad_or_crop(x, y.size(), unet.dimension),
+            scale_factor=2, mode=unet.interpolate_mode, align_corners=False,
+        )
+        bn = unet.batchNorms[depth]
+        reduce_dims = [0] + list(range(2, x.dim()))
+        var, mean = torch.var_mean(x.detach(), dim=reduce_dims, unbiased=True)
+        stats += [mean, var]
+        x = F.batch_norm(x, None, None, bn.weight, bn.bias, True, 0.0, bn.eps)
+        x = x[:, :, : skips[depth].size()[2], : skips[depth].size()[3], : skips[depth].size()[4]]
+        x = torch.cat([x, skips[depth]], 1)
+    x = unet.lastConv(x)
+    return (x / 10, *stats)
+
+
 def checkpoint_unet(unet):
-    """Activation checkpointing for a tallUNet2 (~2.3 GiB per sample across the 6 UNets).
-    The recompute in the backward runs the same ops, but its BatchNorm running-statistics update
-    goes to throwaway copies, so outputs, gradients and the running statistics are all as
-    without checkpointing."""
-    batchnorms = [m for m in unet.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+    """Activation checkpointing for a tallUNet2 (~2.3 GiB per sample across the 6 UNets). The
+    checkpointed part is side-effect free; BatchNorm's running-statistics update is applied
+    once, outside it, with BatchNorm's own formula (same result up to float rounding)."""
+    assert isinstance(unet, networks.UNet2) and unet.dimension == 3
     forward = unet.forward
 
     def checkpointed(x, y):
-        if not torch.is_grad_enabled():
+        if not (unet.training and torch.is_grad_enabled()):
             return forward(x, y)
-        calls = []
-
-        def run(x, y):
-            calls.append(None)
-            if len(calls) == 1:
-                return forward(x, y)
-            # same ops as the forward, but the running-statistics update lands on throwaway copies
-            names = ("running_mean", "running_var", "num_batches_tracked")
-            real = [[getattr(bn, n) for n in names] for bn in batchnorms]
-            for bn, buffers in zip(batchnorms, real):
-                for n, b in zip(names, buffers):
-                    setattr(bn, n, b.clone())
-            try:
-                return forward(x, y)
-            finally:
-                for bn, buffers in zip(batchnorms, real):
-                    for n, b in zip(names, buffers):
-                        setattr(bn, n, b)
-        return torch.utils.checkpoint.checkpoint(run, x, y, use_reentrant=False)
+        out, *stats = _checkpoint(_unet2_forward_pure, unet, x, y)
+        with torch.no_grad():
+            for depth in reversed(range(unet.num_layers)):
+                bn = unet.batchNorms[depth]
+                mean, var = stats[2 * (unet.num_layers - 1 - depth): 2 * (unet.num_layers - depth)]
+                bn.num_batches_tracked.add_(1)
+                momentum = 1.0 / float(bn.num_batches_tracked) if bn.momentum is None else bn.momentum
+                bn.running_mean.mul_(1 - momentum).add_(mean, alpha=momentum)
+                bn.running_var.mul_(1 - momentum).add_(var, alpha=momentum)
+        return out
     unet.forward = checkpointed
     return unet
 
@@ -233,19 +273,39 @@ def make_net(dimension, input_shape, rm=utp.RandomMatrix()):
     return net
 
 
+def prefetching(make_batch, depth=2):
+    """make_batch, run in a background thread up to `depth` batches ahead: at batch 20 it costs
+    ~0.5 s of CPU per step, which would otherwise leave the GPU idle. Same sampling code, so the
+    same data distribution."""
+    batches = queue.Queue(maxsize=depth)
+
+    def worker():
+        while True:
+            batches.put(make_batch())
+    threading.Thread(target=worker, daemon=True).start()
+    return batches.get
+
+
 if __name__ == "__main__":
 
     import datasets
     from datasets import input_shape
 
+    BATCH_SIZE = 20  # per GPU
+    utp.BATCH_SIZE = BATCH_SIZE  # read by utp.make_make_pair
+
     net = make_net(3, input_shape)
+
+    # Inductor recomputes cheap ops in the compiled regions instead of saving them: with the
+    # checkpointing above, 3.5 GiB per sample (as eager) instead of 4.5, at ~8% faster than eager.
+    torch._functorch.config.activation_memory_budget = 0.5
     # Compile the training forward only; the validation pass every 300 steps (eval mode, batch 1,
     # and empty batches past BATCH_SIZE) stays eager rather than costing more compiles.
     # net stays a plain module, so checkpoints and attribute access are unchanged.
     # Modules whose forward tags their identity_map with .isIdentity (a shortcut ICON checks with
     # hasattr). Tagging them before each compiled call matches what eager has done by then, and keeps
     # dynamo's hasattr guards stable: otherwise the eager validation pass adds tags the first compile
-    # did not see, and the training graph recompiles (~5 min).
+    # did not see, and the training graph recompiles.
     tagging_modules = [m for m in net.modules()
                        if "identity_map.isIdentity = True" in inspect.getsource(type(m).forward)]
     compiled_forward = torch.compile(net.forward)
@@ -259,10 +319,8 @@ if __name__ == "__main__":
         return compiled_forward(*args)
     net.forward = forward
 
-    BATCH_SIZE = 4
-
     utp.train_batchfunction(
         net,
-        utp.make_make_pair(datasets),
+        prefetching(utp.make_make_pair(datasets)),
         steps=450000
     )
