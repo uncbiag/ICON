@@ -54,7 +54,7 @@ Use `CUDA_VISIBLE_DEVICES` to choose GPUs. Results, tensorboard logs and `networ
   | | s/sample | GiB/sample |
   |---|---|---|
   | original `unigradicon_train_parallel.py` (shard-datasets library, eager) | 1.23–1.37 | 7.1 |
-  | this script | 1.08–1.11 | 3.6 |
+  | this script (1.20 inside the full training loop with DDP, logging and validation) | 1.08–1.11 | 3.6 |
   | this script with `checkpoint_unets` and the budget removed (most it fits is batch 10 on 90 GB) | 0.92 | 7.1 |
 
 - **Validation output:** every 300 steps it prints 8 per-image losses; at batch 20 all 8 are real. Below batch 8 the
