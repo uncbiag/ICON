@@ -57,7 +57,10 @@ class RegistrationModule(nn.Module):
         # if parents_identity_map is not None:
         #    self.identity_map = parents_identity_map
         # else:
-        _id = identity_map_multiN(self.input_shape, self.spacing)
+        # float64 numpy spacing here, as before: with python floats numpy rounds the identity map
+        # differently (1 ulp), and at near-identity transforms that flips grid_sample's gradient
+        # at voxel centres (1.6% different first-step gradients on noise images)
+        _id = identity_map_multiN(self.input_shape, np.array(self.spacing))
         self.register_buffer("identity_map", torch.from_numpy(_id), persistent=False)
 
         if self.downscale_factor != 1:
