@@ -6,6 +6,7 @@ CT bladder Dice (the raw setting, IO-50, all 17 patients), using the same protoc
 
 | arm | change from the previous arm |
 |---|---|
+| `0_ugi_release` | reference row, no training: the released uniGradICON 1.0.6 weights (about 250k steps), with uniGradICON's own preprocessing, through the same protocol. Shows how far arm 1 (15k steps, yeetle's preprocessing) is from the real model |
 | `1_ugi` | uniGradICON recipe: its UNet pyramid, LNCC σ5, lr 5e-5, flip/permute + affine-noise augmentation, two-phase schedule (final full-res step added for the last 20%). Data from the private zip: COPDGene insp/exp pairs (`dirlab_clamped`), OAI knee, HCP T1 (stripped), AbdomenCT-1K |
 | `2_attn` | attention coarse stage in place of the coarsest UNet |
 | `3_public_unpaired` | yeetle's public datasets, unpaired ones only |
@@ -29,6 +30,7 @@ to 160³. Every arm therefore uses yeetle's preprocessing at 160³, where uniGra
 
 1. **Code:** check out branch `shard-datasets-attention` (bundle: `/home/tgreer/claudevm/shard-datasets-attention.bundle`,
    applies on top of `5c84f94`), then `pip install -e .` into a torch 2.11 venv, as in `RUNGUIDE_fast.md` §2.
+   For the reference row, also `pip install unigradicon==1.0.6 --no-deps`; it downloads the release weights from GitHub on first use.
 2. **Data:** in `training_scripts/unicarl/`:
    ```
    unzip unicarl_public_train.zip      # -> unicarl_public_train/   (the 4-rank shards)

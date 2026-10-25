@@ -25,6 +25,8 @@ usage (unicarl_public_train/ and results/unicarl_private/ unzipped in training_s
     torchrun --standalone --nproc_per_node=4 ablation.py train ARM      -> results/ablation_ARM/
     python ablation.py eval ARM results/ablation_ARM/network_weights_final
                                            -> results/ablation_ARM_eval/  (one GPU; needs GOLD_ATLAS_DATA)
+    python ablation.py eval_release        -> results/ablation_0_ugi_release_eval/  (reference row: the released
+                                              uniGradICON 1.0.6 weights, its own preprocessing; needs pip unigradicon)
     python ablation.py summary             -> results/ablation_summary/
     bash run_ablation.sh                   # all arms in order, train then eval, then summary
 
@@ -286,20 +288,37 @@ def eval_net(arm, weights):
 def evaluate(arm, weights):
     """prostate_bench/bench.py --setting raw --io 50: T2 MR -> native planning CT, uniCARL preprocessing
     on both, 50 IO steps per pair from the trained weights, bladder Dice on the CT grid."""
-    import itk
-    import numpy as np
     import icon_registration.config
-    import icon_registration.itk_wrapper
     import icon_registration.unicarl.register as register
-
     import footsteps
     icon_registration.config.device = torch.device("cuda")
-    out = footsteps.output_dir
     weights = os.path.abspath(weights)
-    with open(os.path.join(out, "config.json"), "w") as fh:
+    with open(os.path.join(footsteps.output_dir, "config.json"), "w") as fh:
         json.dump(dict(ARMS[arm], arm=arm, weights=weights, setting="raw", io_steps=IO_STEPS,
                        gold_atlas_data=GOLD_ATLAS_DATA, patients=PATIENTS), fh, indent=1)
-    net = eval_net(arm, weights)
+    score(arm, eval_net(arm, weights), register.preprocess, register.preprocess)
+
+
+def evaluate_release():
+    """The reference row: the released uniGradICON 1.0.6 weights through the same protocol, with
+    uniGradICON's own preprocessing (MR: min..p99, CT: -1000..1000 HU), as prostate_bench/bench.py does."""
+    import icon_registration.config
+    import footsteps
+    import unigradicon
+    icon_registration.config.device = torch.device("cuda")
+    with open(os.path.join(footsteps.output_dir, "config.json"), "w") as fh:
+        json.dump(dict(arm="0_ugi_release", weights=f"pip unigradicon {getattr(unigradicon, '__version__', '?')} get_unigradicon()",
+                       setting="raw", io_steps=IO_STEPS, gold_atlas_data=GOLD_ATLAS_DATA, patients=PATIENTS), fh, indent=1)
+    net = unigradicon.get_unigradicon()
+    score("0_ugi_release", net, lambda im: unigradicon.preprocess(im, "mri"), lambda im: unigradicon.preprocess(im, "ct"))
+
+
+def score(arm, net, preprocess_moving, preprocess_fixed):
+    import itk
+    import numpy as np
+    import footsteps
+    import icon_registration.itk_wrapper
+    out = footsteps.output_dir
     initial = copy.deepcopy(net.state_dict())
     rows = []
     for pid in PATIENTS:
@@ -309,7 +328,7 @@ def evaluate(arm, weights):
         net.load_state_dict(initial)  # IO must not carry over between patients
         with torch.enable_grad():
             phi, _ = icon_registration.itk_wrapper.register_pair(
-                net, register.preprocess(mr), register.preprocess(ct), finetune_steps=IO_STEPS)
+                net, preprocess_moving(mr), preprocess_fixed(ct), finetune_steps=IO_STEPS)
         lab_m = itk.imread(f"{GOLD_ATLAS_DATA}/{pid}/t2_bladder.nii.gz")
         lab_f = itk.imread(f"{GOLD_ATLAS_DATA}/{pid}/ct_raw_bladder.nii.gz")
         warped = itk.resample_image_filter(lab_m, transform=phi, interpolator=itk.NearestNeighborInterpolateImageFunction.New(lab_m),
@@ -338,7 +357,7 @@ def summary():
     import footsteps
     import numpy as np
     lines = [f"{'arm':20s} {'mean':>6s} {'median':>6s} {'min':>6s}  eval run (Gold Atlas raw, IO-50, bladder Dice, 17 patients)"]
-    for arm in ARMS:
+    for arm in ["0_ugi_release"] + list(ARMS):
         run = latest_run(f"ablation_{arm}_eval", "gold_atlas_raw_io50.csv")
         if run is None:
             lines.append(f"{arm:20s}   (not evaluated)")
@@ -361,6 +380,9 @@ if __name__ == "__main__":
     elif command == "eval":
         os.environ.setdefault("FOOTSTEPS_NAME", f"ablation_{rest[0]}_eval")
         evaluate(rest[0], rest[1])
+    elif command == "eval_release":
+        os.environ.setdefault("FOOTSTEPS_NAME", "ablation_0_ugi_release_eval")
+        evaluate_release()
     elif command == "summary":
         os.environ.setdefault("FOOTSTEPS_NAME", "ablation_summary")
         summary()

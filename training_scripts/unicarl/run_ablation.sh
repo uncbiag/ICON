@@ -6,6 +6,9 @@
 set -e
 cd "$(dirname "$0")"
 PYTHON=${PYTHON:-python}
+if [ -z "$($PYTHON ablation.py latest ablation_0_ugi_release_eval gold_atlas_raw_io50.csv)" ]; then
+  CUDA_VISIBLE_DEVICES=${EVAL_GPU:-0} $PYTHON ablation.py eval_release   # reference row; needs pip unigradicon
+fi
 for arm in $($PYTHON -c "import ablation; print(' '.join(ablation.ARMS))"); do
   if [ -z "$($PYTHON ablation.py latest ablation_$arm network_weights_final)" ]; then
     $PYTHON -m torch.distributed.run --standalone --nproc_per_node=4 ablation.py train $arm
