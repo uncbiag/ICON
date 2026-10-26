@@ -37,8 +37,8 @@ to 160³. Every arm therefore uses yeetle's preprocessing at 160³, where uniGra
    unzip unicarl_public_train.zip      # -> unicarl_public_train/   (the 4-rank shards)
    unzip unicarl_private.zip           # -> results/unicarl_private/
    ```
-3. **Gold Atlas:** copy `prostate_bench/data/<pid>/{t2,ct_raw,t2_bladder,ct_raw_bladder}.nii.gz` for the 17 patients,
-   and set `GOLD_ATLAS_DATA` to that directory.
+3. **Gold Atlas:** `unzip gold_atlas.zip` (from `/home/tgreer/claudevm/gold_atlas.zip`: the 17 patients'
+   `{t2,ct_raw,t2_bladder,ct_raw_bladder}.nii.gz`, from `prostate_bench/data`), then set `GOLD_ATLAS_DATA=/path/to/gold_atlas`.
 
 ## Run
 
