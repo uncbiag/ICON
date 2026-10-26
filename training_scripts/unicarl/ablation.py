@@ -17,6 +17,8 @@ uniGradICON as the two dataset zips allow; arm 8 is yeetle (utp.make_net, public
     7_lr               lr 2e-5
     8_yeetle           yeetle's network: CARL rotation fields, blurs between steps, its step layout, final step
                        trained from the start (single phase)
+    9_yeetle_noblur    off the chain: yeetle without the Gaussian blur of each step's displacement field (the
+                       reflected extrapolation the Blur wrapper also does is kept), to isolate the blurring
 
 Not ablatable from the zips: both store volumes already foreground-cropped, p1-p99 clipped and resized
 to 160^3, so every arm uses yeetle's preprocessing and 160^3 (uniGradICON: whole volume, 175^3).
@@ -36,6 +38,7 @@ a copy of this script; package_versions.txt). Names default to the ones above; F
 
 import contextlib
 import copy
+import functools
 import json
 import os
 import random
@@ -69,6 +72,7 @@ ARMS["5_augmentify"] = dict(ARMS["4_public_all"], aug="augmentify")
 ARMS["6_sqlncc"] = dict(ARMS["5_augmentify"], loss="sqlncc4")
 ARMS["7_lr"] = dict(ARMS["6_sqlncc"], lr=2e-5)
 ARMS["8_yeetle"] = dict(ARMS["7_lr"], arch="yeetle")
+ARMS["9_yeetle_noblur"] = dict(ARMS["8_yeetle"], arch="yeetle_noblur")
 
 
 # ---------------------------------------------------------------- networks
@@ -80,11 +84,16 @@ def make_net(cfg, final_step):
     import icon_registration.unicarl.fixed_point_carl as fpc
     import icon_registration.unicarl.unigradicon_train_parallel as utp
 
-    if cfg["arch"] == "yeetle":
+    if cfg["arch"] in ("yeetle", "yeetle_noblur"):
         # yeetle's make_net builds its own loss (SquaredLNCC sigma 4, lmbda 1.5) and augmentify wrapper,
         # and always has the final full-res step
         assert cfg["loss"] == "sqlncc4" and cfg["aug"] == "augmentify"
-        return utp.make_net(3, INPUT_SHAPE, False)
+        net = utp.make_net(3, INPUT_SHAPE, False)
+        if cfg["arch"] == "yeetle_noblur":
+            for m in net.modules():
+                if type(m) is fpc.Blur:
+                    m.__class__ = _no_blur_class()  # no parameters, so checkpoints are interchangeable
+        return net
 
     # unigradicon.make_network: a 40 -> 80 -> 160 pyramid of tallUNet2 displacement fields, plus a
     # second full-res step in the last training phase
@@ -101,6 +110,26 @@ def make_net(cfg, final_step):
     if final_step:
         ts = icon.TwoStepRegistration(ts, icon.FunctionFromVectorField(networks.tallUNet2(dimension=3)))
     return wrap(ts, cfg)
+
+
+@functools.lru_cache(maxsize=None)
+def _no_blur_class():
+    import icon_registration.unicarl.fixed_point_carl as fpc
+
+    class NoBlur(fpc.Blur):
+        """fpc.Blur without the Gaussian blur: the same reflected extrapolation of the field."""
+        def forward(self, A, B):
+            self.identity_map.isIdentity = True
+            phi = self.net(A, B)(self.identity_map)
+            field = self.as_function(phi - self.identity_map)
+
+            def transform(coords):
+                if hasattr(coords, "isIdentity") and coords.shape[1:] == phi.shape[1:]:
+                    return phi
+                coords_reflected = coords - 2 * coords * (coords < 0) - 2 * (coords - 1) * (coords > 1)
+                return coords + 2 * field(coords) - field(coords_reflected)
+            return transform
+    return NoBlur
 
 
 def wrap(ts, cfg):
@@ -236,7 +265,7 @@ def train(arm):
         writer = SummaryWriter(os.path.join(out, "tensorboard"), flush_secs=30)
     next_batch = fast_training.prefetching(make_batch_fn(load_datasets(cfg["data"])))
 
-    two_phase = cfg["arch"] != "yeetle"
+    two_phase = cfg["arch"] not in ("yeetle", "yeetle_noblur")
     phases = [(round(STEPS * (1 - FINAL_STEP_FRACTION)), False), (round(STEPS * FINAL_STEP_FRACTION), True)] if two_phase else [(STEPS, True)]
     net = None
     step = 0

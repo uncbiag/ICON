@@ -15,6 +15,7 @@ CT bladder Dice (the raw setting, IO-50, all 17 patients), using the same protoc
 | `6_sqlncc` | SquaredLNCC σ4 |
 | `7_lr` | lr 2e-5 |
 | `8_yeetle` | yeetle's network (CARL rotation fields, blurs, its step layout, final step from the start), which makes it yeetle |
+| `9_yeetle_noblur` | off the chain: yeetle without the Gaussian blur of each step's displacement field. `Blur`'s reflected extrapolation outside the image is kept, so only the smoothing changes. Compare with `8_yeetle`. The blur came from the Feb 2025 "series equivariance" experiments in `uncbiag/equivariant_reg_2`; the old `no_relax-1` run (no blur, 80³ grid) scored 0 on Gold Atlas |
 
 Arm 1 is expected to score about 0: without the attention stage nothing can find the raw-setting offset of up to 200 mm.
 It anchors the chain, and arm 2 measures how much of the gap the attention stage explains. Later changes are
