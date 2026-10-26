@@ -59,7 +59,8 @@ python ablation.py summary
 ## Outputs: footsteps runs under `results/`
 
 - `ablation_<arm>/`: `info.txt` (command, host, git hash, uncommitted diff), a copy of `ablation.py`,
-  `package_versions.txt`, `config.json` (the arm's settings), `tensorboard/`, `network_weights_{5000,10000,15000,final}`.
+  `package_versions.txt`, `config.json` (the arm's settings), `tensorboard/` (loss terms every step; `moving_image`, `fixed_image`,
+  `warped_moving_image`, `difference` middle slices every 300 steps), `network_weights_{5000,10000,15000,final}`.
 - `ablation_<arm>_eval/`: the same footsteps record, plus `config.json` (with the path of the weights it scored) and
   `gold_atlas_raw_io50.csv` (per-patient Dice).
 - `ablation_summary/summary.txt`: mean/median/min per arm, and which eval run each number came from.

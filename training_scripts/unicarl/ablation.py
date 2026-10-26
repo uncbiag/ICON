@@ -61,6 +61,7 @@ BATCH_SIZE = 4             # per GPU
 LMBDA = 1.5
 IO_STEPS = 50
 CHECKPOINT_EVERY = 5000
+IMAGES_EVERY = 300  # tensorboard image diagnostics, as yeetle's training loop
 
 _UGI = dict(data="ugi4", arch="ugi", aug="ugi", loss="lncc5", lr=5e-5)
 ARMS = {}
@@ -241,6 +242,26 @@ def make_batch_fn(ds_list):
 
 # ---------------------------------------------------------------- training
 
+def log_images(writer, net, A, B, step):
+    """yeetle's (utp.train_batchfunction) and uniGradICON's tensorboard diagnostics: middle slices of
+    moving, fixed, warped moving and (warped - fixed + 0.5), for one unaugmented batch in eval mode."""
+    def render(im):
+        im = im[:, :1, :, :, im.shape[4] // 2].detach().float().cpu()
+        im = im - im.amin(dim=(1, 2, 3), keepdim=True)
+        im = im / im.amax(dim=(1, 2, 3), keepdim=True).clamp_min(1e-6)
+        return im[:, [0, 0, 0]]
+    net.eval()
+    with torch.no_grad():
+        net(A, B)
+        warped = net.warped_image_A[:, :1]
+    net.train()
+    writer.add_images("moving_image", render(A), step, dataformats="NCHW")
+    writer.add_images("fixed_image", render(B), step, dataformats="NCHW")
+    writer.add_images("warped_moving_image", render(warped), step, dataformats="NCHW")
+    difference = torch.clip(warped - B + 0.5, 0, 1)[:, :, :, :, warped.shape[4] // 2].cpu()
+    writer.add_images("difference", difference[:, [0, 0, 0]], step, dataformats="NCHW")
+
+
 def train(arm):
     cfg = ARMS[arm]
     import fast_training
@@ -291,6 +312,9 @@ def train(arm):
             if world_rank == 0:
                 for k, v in loss._asdict().items():
                     writer.add_scalar(k, float(v.mean()), step)
+                if step % IMAGES_EVERY == 0 or step == 1:
+                    vis_A, vis_B = next_batch()
+                    log_images(writer, net, vis_A.to(device), vis_B.to(device), step)
                 if step % 100 == 0:
                     print(f"{arm} step {step}/{STEPS} " + " ".join(f"{k}={float(v.mean()):.4f}" for k, v in loss._asdict().items()), flush=True)
                 if step % CHECKPOINT_EVERY == 0 or step == STEPS:
