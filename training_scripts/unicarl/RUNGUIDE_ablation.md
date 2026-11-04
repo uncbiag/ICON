@@ -16,6 +16,7 @@ CT bladder Dice (the raw setting, IO-50, all 17 patients), using the same protoc
 | `7_lr` | lr 2e-5 |
 | `8_yeetle` | yeetle's network (CARL rotation fields, blurs, its step layout, final step from the start), which makes it yeetle |
 | `9_yeetle_noblur` | off the chain: yeetle without the Gaussian blur of each step's displacement field. `Blur`'s reflected extrapolation outside the image is kept, so only the smoothing changes. Compare with `8_yeetle`. The blur came from the Feb 2025 "series equivariance" experiments in `uncbiag/equivariant_reg_2`; the old `no_relax-1` run (no blur, 80³ grid) scored 0 on Gold Atlas |
+| `10_yeetle_nopad` | off the chain: yeetle with augmentify's random affines fitted inside the field of view, so the network never sees border padding. Each `RandomMatrix` draw is shrunk about the centre until it maps the image into itself, times a further U(0.9, 1), then shifted by a random fraction of the room left on each axis (median zoom 0.69 per axis). The rotation and shear are kept as drawn. Compare with `8_yeetle`: yeetle's network can read its random affine off the border-padding streaks, so its training visualizations look perfect while the stripped network recovers the same affine much worse without padding |
 
 Arm 1 is expected to score about 0: without the attention stage nothing can find the raw-setting offset of up to 200 mm.
 It anchors the chain, and arm 2 measures how much of the gap the attention stage explains. Later changes are
@@ -37,7 +38,10 @@ to 160³. Every arm therefore uses yeetle's preprocessing at 160³, where uniGra
    unzip unicarl_public_train.zip      # -> unicarl_public_train/   (the 4-rank shards)
    unzip unicarl_private.zip           # -> results/unicarl_private/
    ```
-3. **Gold Atlas:** `unzip gold_atlas.zip` (from `/home/tgreer/claudevm/gold_atlas.zip`: the 17 patients'
+3. **Anatomix EPE pack:** copy `anatomix_eval_pack.trch` (352 MB) into `training_scripts/unicarl/`, or set
+   `ANATOMIX_EVAL_PACK`. It holds 15 anatomix subjects the public data trained on and 15 held out, preprocessed,
+   plus the affine draws. With it present, `run_ablation.sh` also runs `eval_anatomix` for every arm.
+4. **Gold Atlas:** `unzip gold_atlas.zip` (from `/home/tgreer/claudevm/gold_atlas.zip`: the 17 patients'
    `{t2,ct_raw,t2_bladder,ct_raw_bladder}.nii.gz`, from `prostate_bench/data`), then set `GOLD_ATLAS_DATA=/path/to/gold_atlas`.
 
 ## Run
@@ -53,6 +57,7 @@ arms whose training or evaluation already finished are skipped. Single steps:
 ```
 torchrun --standalone --nproc_per_node=4 ablation.py train 2_attn
 python ablation.py eval 2_attn results/ablation_2_attn/network_weights_final
+python ablation.py eval_anatomix 2_attn results/ablation_2_attn/network_weights_final
 python ablation.py summary
 ```
 
@@ -63,7 +68,12 @@ python ablation.py summary
   `warped_moving_image`, `difference` middle slices every 300 steps), `network_weights_{5000,10000,15000,final}`.
 - `ablation_<arm>_eval/`: the same footsteps record, plus `config.json` (with the path of the weights it scored) and
   `gold_atlas_raw_io50.csv` (per-patient Dice).
-- `ablation_summary/summary.txt`: mean/median/min per arm, and which eval run each number came from.
+- `ablation_<arm>_anatomix/`: `anatomix_epe.csv`, the endpoint error in voxels (no IO) per subject, for three conditions with exact
+  ground truth. `affine_border` is a training-style affine with about 25% border padding. `zoom_identity` is the zoom alone, as a control.
+  `zoom_affine_border` is the same affine inside the central 70%, with about 5% padding: the cue-free number.
+- `ablation_summary/summary.txt`: mean/median/min per arm, the anatomix EPE table, and which eval run each number came from.
+- **TensorBoard, augmentify arms:** `stripped_warped_moving_image` and `stripped_difference` show the same batch through the inner network
+  alone, as evaluation runs it.
 
 Reruns never overwrite: footsteps adds a `-N` suffix, and the launcher and summary use the newest complete run.
 

@@ -19,6 +19,8 @@ uniGradICON as the two dataset zips allow; arm 8 is yeetle (utp.make_net, public
                        trained from the start (single phase)
     9_yeetle_noblur    off the chain: yeetle without the Gaussian blur of each step's displacement field (the
                        reflected extrapolation the Blur wrapper also does is kept), to isolate the blurring
+    10_yeetle_nopad    off the chain: yeetle with augmentify's random affines fitted inside the field of view, so
+                       the network never sees border padding (whose streaks give the affine away); compare with 8
 
 Not ablatable from the zips: both store volumes already foreground-cropped, p1-p99 clipped and resized
 to 160^3, so every arm uses yeetle's preprocessing and 160^3 (uniGradICON: whole volume, 175^3).
@@ -29,6 +31,8 @@ usage (unicarl_public_train/ and results/unicarl_private/ unzipped in training_s
                                            -> results/ablation_ARM_eval/  (one GPU; needs GOLD_ATLAS_DATA)
     python ablation.py eval_release        -> results/ablation_0_ugi_release_eval/  (reference row: the released
                                               uniGradICON 1.0.6 weights, its own preprocessing; needs pip unigradicon)
+    python ablation.py eval_anatomix ARM results/ablation_ARM/network_weights_final
+                                           -> results/ablation_ARM_anatomix/  (one GPU; needs ANATOMIX_EVAL_PACK)
     python ablation.py summary             -> results/ablation_summary/
     bash run_ablation.sh                   # all arms in order, train then eval, then summary
 
@@ -51,6 +55,7 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 PRIVATE_CACHE = os.environ.get("UNICARL_PRIVATE_CACHE", os.path.join(HERE, "results", "unicarl_private"))
 GOLD_ATLAS_DATA = os.environ.get("GOLD_ATLAS_DATA", "/home/tgreer/prostate_bench/data")
+ANATOMIX_EVAL_PACK = os.environ.get("ANATOMIX_EVAL_PACK", os.path.join(HERE, "anatomix_eval_pack.trch"))
 PATIENTS = ["1_01_P", "1_02_P", "1_03_P", "1_04_P", "1_05_P", "1_06_P", "1_07_P", "1_08_P",
             "2_03_P", "2_04_P", "2_05_P", "2_10_P", "2_11_P", "3_01_P", "3_02_P", "3_03_P", "3_04_P"]
 
@@ -74,6 +79,9 @@ ARMS["6_sqlncc"] = dict(ARMS["5_augmentify"], loss="sqlncc4")
 ARMS["7_lr"] = dict(ARMS["6_sqlncc"], lr=2e-5)
 ARMS["8_yeetle"] = dict(ARMS["7_lr"], arch="yeetle")
 ARMS["9_yeetle_noblur"] = dict(ARMS["8_yeetle"], arch="yeetle_noblur")
+ARMS["10_yeetle_nopad"] = dict(ARMS["8_yeetle"], aug="augmentify_nopad")
+
+NOPAD_MIN_ZOOM = 0.9  # nopad: each affine is shrunk to fit the field of view, then by a further U(0.9, 1)
 
 
 # ---------------------------------------------------------------- networks
@@ -88,12 +96,21 @@ def make_net(cfg, final_step):
     if cfg["arch"] in ("yeetle", "yeetle_noblur"):
         # yeetle's make_net builds its own loss (SquaredLNCC sigma 4, lmbda 1.5) and augmentify wrapper,
         # and always has the final full-res step
-        assert cfg["loss"] == "sqlncc4" and cfg["aug"] == "augmentify"
+        assert cfg["loss"] == "sqlncc4" and cfg["aug"] in ("augmentify", "augmentify_nopad")
         net = utp.make_net(3, INPUT_SHAPE, False)
         if cfg["arch"] == "yeetle_noblur":
             for m in net.modules():
                 if type(m) is fpc.Blur:
                     m.__class__ = _no_blur_class()  # no parameters, so checkpoints are interchangeable
+        if cfg["aug"] == "augmentify_nopad":
+            # augmentify = TwoStepRegistration(FunctionFromMatrix(rm), PostStep(FunctionsFromMatrix(rm), inner)):
+            # the inner network sees A sampled at M1 x and B sampled at M2^-1 x, both drawn from one shared rm.
+            # Replace the two draws so that M1 and M2^-1 each map the unit cube into itself (no parameters, so
+            # checkpoints are interchangeable)
+            NoPadMatrix = _nopad_matrix_class()
+            net.regis_net.netPhi.net = NoPadMatrix(inverse=False)
+            net.regis_net.netPsi.netPhi.net = NoPadMatrix(inverse=True)
+            net.assign_identity_map(INPUT_SHAPE)
         return net
 
     # unigradicon.make_network: a 40 -> 80 -> 160 pyramid of tallUNet2 displacement fields, plus a
@@ -133,6 +150,41 @@ def _no_blur_class():
     return NoBlur
 
 
+def fit_in_fov(M, min_zoom=NOPAD_MIN_ZOOM):
+    """Shrink a batch of centred affines (B x 4 x 4, [0,1] coordinates, as utp.RandomMatrix returns) about the
+    centre until each maps the unit cube into itself, times a further zoom u ~ U(min_zoom, 1), then translate by a
+    uniform draw from the slack left on each axis. Fitting instead of rejecting keeps the rotation/shear tails."""
+    L = M[:, :3, :3]
+    rows = L.abs().sum(2)  # corner c -> .5 + L (c - .5) stays in [0, 1] iff each row's sum |L_ij| <= 1
+    u = min_zoom + (1 - min_zoom) * torch.rand(M.shape[0], 1, device=M.device)
+    s = u / rows.amax(1, keepdim=True)
+    slack = 0.5 * (1 - s * rows)
+    t = (2 * torch.rand_like(slack) - 1) * slack
+    out = torch.eye(4, device=M.device).repeat(M.shape[0], 1, 1)
+    out[:, :3, :3] = s[:, :, None] * L
+    out[:, :3, 3] = 0.5 - 0.5 * out[:, :3, :3].sum(2) + t  # x -> s L (x - .5) + .5 + t
+    return out
+
+
+@functools.lru_cache(maxsize=None)
+def _nopad_matrix_class():
+    import icon_registration as icon
+    import icon_registration.unicarl.unigradicon_train_parallel as utp
+
+    class NoPadMatrix(icon.RegistrationModule):
+        """utp.RandomMatrix's draw, fitted inside the field of view. inverse=True returns the inverse of a fitted
+        matrix, for carl.FunctionsFromMatrix, which samples its image at the inverse."""
+        def __init__(self, inverse):
+            super().__init__()
+            self.inverse = inverse
+            self.rm = utp.RandomMatrix()
+
+        def forward(self, image_A, image_B):
+            M = fit_in_fov(self.rm(image_A, image_B))
+            return torch.linalg.inv(M) if self.inverse else M
+    return NoPadMatrix
+
+
 def wrap(ts, cfg):
     import icon_registration as icon
     import icon_registration.unicarl.unigradicon_train_parallel as utp
@@ -147,7 +199,7 @@ def wrap(ts, cfg):
 
 def inner(net, cfg):
     """The registration network without the augmentify wrapper."""
-    return net.regis_net.netPsi.netPsi if cfg["aug"] == "augmentify" else net.regis_net
+    return net.regis_net.netPsi.netPsi if cfg["aug"].startswith("augmentify") else net.regis_net
 
 
 def add_final_step(net, cfg):
@@ -242,24 +294,37 @@ def make_batch_fn(ds_list):
 
 # ---------------------------------------------------------------- training
 
-def log_images(writer, net, A, B, step):
+def log_images(writer, net, cfg, A, B, step):
     """yeetle's (utp.train_batchfunction) and uniGradICON's tensorboard diagnostics: middle slices of
-    moving, fixed, warped moving and (warped - fixed + 0.5), for one unaugmented batch in eval mode."""
+    moving, fixed, warped moving and (warped - fixed + 0.5), for one unaugmented batch in eval mode.
+    With augmentify, also the same for the inner network alone (stripped_*), as evaluation runs it: the
+    wrapped network can read its random affine off the border padding, so its images can look perfect
+    while the inner network on its own is far off."""
     def render(im):
         im = im[:, :1, :, :, im.shape[4] // 2].detach().float().cpu()
         im = im - im.amin(dim=(1, 2, 3), keepdim=True)
         im = im / im.amax(dim=(1, 2, 3), keepdim=True).clamp_min(1e-6)
         return im[:, [0, 0, 0]]
+
+    def log(prefix, warped):
+        writer.add_images(prefix + "warped_moving_image", render(warped), step, dataformats="NCHW")
+        difference = torch.clip(warped - B + 0.5, 0, 1)[:, :, :, :, warped.shape[4] // 2].cpu()
+        writer.add_images(prefix + "difference", difference[:, [0, 0, 0]], step, dataformats="NCHW")
     net.eval()
     with torch.no_grad():
         net(A, B)
-        warped = net.warped_image_A[:, :1]
+        log("", net.warped_image_A[:, :1])
+        if cfg["aug"].startswith("augmentify"):
+            wrapped = net.regis_net
+            net.regis_net = inner(net, cfg)
+            try:
+                net(A, B)
+                log("stripped_", net.warped_image_A[:, :1])
+            finally:
+                net.regis_net = wrapped
     net.train()
     writer.add_images("moving_image", render(A), step, dataformats="NCHW")
     writer.add_images("fixed_image", render(B), step, dataformats="NCHW")
-    writer.add_images("warped_moving_image", render(warped), step, dataformats="NCHW")
-    difference = torch.clip(warped - B + 0.5, 0, 1)[:, :, :, :, warped.shape[4] // 2].cpu()
-    writer.add_images("difference", difference[:, [0, 0, 0]], step, dataformats="NCHW")
 
 
 def train(arm):
@@ -314,7 +379,7 @@ def train(arm):
                     writer.add_scalar(k, float(v.mean()), step)
                 if step % IMAGES_EVERY == 0 or step == 1:
                     vis_A, vis_B = next_batch()
-                    log_images(writer, net, vis_A.to(device), vis_B.to(device), step)
+                    log_images(writer, net, cfg, vis_A.to(device), vis_B.to(device), step)
                 if step % 100 == 0:
                     print(f"{arm} step {step}/{STEPS} " + " ".join(f"{k}={float(v.mean()):.4f}" for k, v in loss._asdict().items()), flush=True)
                 if step % CHECKPOINT_EVERY == 0 or step == STEPS:
@@ -397,6 +462,71 @@ def score(arm, net, preprocess_moving, preprocess_fixed):
     print(f"{arm}: mean {v.mean():.3f} median {np.median(v):.3f} min {v.min():.3f} -> {path}", flush=True)
 
 
+ANATOMIX_CONDS = ["affine_border", "zoom_identity", "zoom_affine_border"]
+
+
+def anatomix_epe(net, pack):
+    """Endpoint error of net (inner network, no IO) on anatomix synthetic pairs with exact ground truth.
+
+    Each pack subject has view1/view2 of one label map, each preprocessed as in training (own foreground crop,
+    p1-p99, 160^3), and the crop map (scale, offset) sending view2-grid points to the same anatomy on the view1 grid.
+    fixed = view2 sampled at M y, moving = view1 (sampled at Z z for the zoom conditions); both resampled with
+    border padding, as augmentify does. Ground truth phi_AB = Z^-1 C M (with M -> M Z for zoom conditions).
+        affine_border       M = a RandomMatrix draw: ~25% of the fixed image is border padding (the cue)
+        zoom_identity       M = identity, both images the central 70% (Z): the zoom alone, a control
+        zoom_affine_border  M = the same draw inside the central 70%: ~5% padding, so the affine is cue-free
+    EPE is in voxels of the 160^3 grid, inside the fixed image's foreground labels (zero-padded)."""
+    def warp(x, phi, mode, padding="border"):
+        grid = (2 * phi - 1).permute(0, 2, 3, 4, 1).flip(-1)
+        return F.grid_sample(x, grid, mode=mode, padding_mode=padding, align_corners=True)
+
+    def apply(M, y):
+        return (M[:3, :3] @ y.flatten(2) + M[:3, 3:]).view_as(y)
+    idm = net.identity_map
+    Z = pack["zoom"].cuda()
+    rows = []
+    for subj in pack["subjects"]:
+        x1, x2 = ((t.cuda().float() - t.min()) / (t.max() - t.min()) for t in (subj["view1"], subj["view2"]))
+        l2 = subj["label2"].cuda().float()
+        scale, offset = (t.cuda().float().view(1, 3, 1, 1, 1) for t in (subj["scale"], subj["offset"]))
+        for cond in ANATOMIX_CONDS:
+            M = torch.eye(4, device="cuda") if cond == "zoom_identity" else subj["affine"].cuda()
+            Ma = Z if cond.startswith("zoom") else torch.eye(4, device="cuda")
+            M = M @ Ma if cond.startswith("zoom") else M
+            My = apply(M, idm)
+            truth = apply(torch.linalg.inv(Ma), scale * My + offset)
+            fixed = warp(x2, My, "bilinear")
+            moving = warp(x1, apply(Ma, idm), "bilinear") if cond.startswith("zoom") else x1
+            mask = warp(l2, My, "nearest", "zeros")[0, 0] > 0  # foreground only: none from the padding
+            with torch.no_grad():
+                net(moving, fixed)
+            epe = ((net.phi_AB_vectorfield - truth)[0].norm(dim=0)[mask] * (idm.shape[2] - 1)).mean().item()
+            epe0 = ((idm - truth)[0].norm(dim=0)[mask] * (idm.shape[2] - 1)).mean().item()
+            rows.append((subj["split"], cond, subj["id"], epe, epe0))
+    return rows
+
+
+def evaluate_anatomix(arm, weights):
+    """Cue-free capture range: anatomix_epe on the pack (15 subjects the public data trained on, 15 held out;
+    the pack stores the preprocessed views and the affine draws, so every arm sees the same pairs)."""
+    import numpy as np
+    import icon_registration.config
+    import footsteps
+    icon_registration.config.device = torch.device("cuda")
+    weights = os.path.abspath(weights)
+    with open(os.path.join(footsteps.output_dir, "config.json"), "w") as fh:
+        json.dump(dict(ARMS[arm], arm=arm, weights=weights, pack=os.path.abspath(ANATOMIX_EVAL_PACK), conds=ANATOMIX_CONDS), fh, indent=1)
+    rows = anatomix_epe(eval_net(arm, weights), torch.load(ANATOMIX_EVAL_PACK, weights_only=False))
+    path = os.path.join(footsteps.output_dir, "anatomix_epe.csv")
+    with open(path, "w") as fh:
+        fh.write("split,cond,subject,epe,epe_before\n" + "".join(f"{sp},{c},{i},{e:.3f},{e0:.3f}\n" for sp, c, i, e, e0 in rows))
+    for cond in ANATOMIX_CONDS:
+        for split in ["trained", "held-out"]:
+            v = np.array([r[3:] for r in rows if r[0] == split and r[1] == cond])
+            print(f"{arm} {split:8s} {cond:18s} EPE {v[:, 0].mean():6.2f} (median {np.median(v[:, 0]):5.2f}) vox, before {v[:, 1].mean():5.1f}", flush=True)
+    print(f"-> {path}", flush=True)
+
+
 def latest_run(name, required_file):
     """The newest footsteps run results/<name>[-N]/ that contains required_file, or None."""
     import glob
@@ -417,6 +547,16 @@ def summary():
             continue
         v = np.array([float(l.split(",")[1]) for l in open(os.path.join(run, "gold_atlas_raw_io50.csv")).read().splitlines()[1:]])
         lines.append(f"{arm:20s} {v.mean():6.3f} {np.median(v):6.3f} {v.min():6.3f}  {os.path.relpath(run, HERE)}")
+    cols = [(c, sp) for c in ANATOMIX_CONDS for sp in ("trained", "held-out")]
+    lines += ["", "anatomix mean EPE (voxels, no IO; zoom_affine_border is the cue-free affine)",
+              f"{'arm':20s} " + " ".join(f"{c[:18] + ' ' + sp[:4]:>23s}" for c, sp in cols) + "  eval run"]
+    for arm in ARMS:
+        run = latest_run(f"ablation_{arm}_anatomix", "anatomix_epe.csv")
+        if run is None:
+            continue
+        rows = [l.split(",") for l in open(os.path.join(run, "anatomix_epe.csv")).read().splitlines()[1:]]
+        means = [np.mean([float(r[3]) for r in rows if r[1] == c and r[0] == sp]) for c, sp in cols]
+        lines.append(f"{arm:20s} " + " ".join(f"{m:23.2f}" for m in means) + f"  {os.path.relpath(run, HERE)}")
     text = "\n".join(lines)
     print(text)
     with open(os.path.join(footsteps.output_dir, "summary.txt"), "w") as fh:
@@ -433,6 +573,9 @@ if __name__ == "__main__":
     elif command == "eval":
         os.environ.setdefault("FOOTSTEPS_NAME", f"ablation_{rest[0]}_eval")
         evaluate(rest[0], rest[1])
+    elif command == "eval_anatomix":
+        os.environ.setdefault("FOOTSTEPS_NAME", f"ablation_{rest[0]}_anatomix")
+        evaluate_anatomix(rest[0], rest[1])
     elif command == "eval_release":
         os.environ.setdefault("FOOTSTEPS_NAME", "ablation_0_ugi_release_eval")
         evaluate_release()
