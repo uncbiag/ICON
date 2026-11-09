@@ -22,6 +22,11 @@ uniGradICON as the two dataset zips allow; arm 8 is yeetle (utp.make_net, public
     10_yeetle_nopad    off the chain: yeetle with augmentify's random affines fitted inside the field of view, so
                        the network never sees border padding (whose streaks give the affine away); compare with 8
 
+Augmentation-scale sweep (AUG_SWEEP, run by run_aug_sweep.sh): yeetle (arm 8) with augmentify's RandomMatrix
+rotation_scale = shear_stretch_scale = s, for s from 0 (identity matrices: the wrapper is a no-op) to 0.125
+(yeetle trains at 0.1). Arms aug0.000 ... aug0.125. aug0.100 repeats 8_yeetle (same seeds, but cuDNN's
+nondeterministic kernels make it a different run), so the pair also estimates run-to-run noise.
+
 Not ablatable from the zips: both store volumes already foreground-cropped, p1-p99 clipped and resized
 to 160^3, so every arm uses yeetle's preprocessing and 160^3 (uniGradICON: whole volume, 175^3).
 
@@ -80,6 +85,9 @@ ARMS["7_lr"] = dict(ARMS["6_sqlncc"], lr=2e-5)
 ARMS["8_yeetle"] = dict(ARMS["7_lr"], arch="yeetle")
 ARMS["9_yeetle_noblur"] = dict(ARMS["8_yeetle"], arch="yeetle_noblur")
 ARMS["10_yeetle_nopad"] = dict(ARMS["8_yeetle"], aug="augmentify_nopad")
+AUG_SCALES = [0.0, 0.025, 0.05, 0.075, 0.1, 0.125]
+AUG_SWEEP = {f"aug{a:.3f}": dict(ARMS["8_yeetle"], aug_scale=a) for a in AUG_SCALES}
+ALL_ARMS = {**ARMS, **AUG_SWEEP}
 
 NOPAD_MIN_ZOOM = 0.9  # nopad: each affine is shrunk to fit the field of view, then by a further U(0.9, 1)
 
@@ -97,7 +105,9 @@ def make_net(cfg, final_step):
         # yeetle's make_net builds its own loss (SquaredLNCC sigma 4, lmbda 1.5) and augmentify wrapper,
         # and always has the final full-res step
         assert cfg["loss"] == "sqlncc4" and cfg["aug"] in ("augmentify", "augmentify_nopad")
-        net = utp.make_net(3, INPUT_SHAPE, False)
+        # aug_scale: RandomMatrix(rotation_scale, shear_stretch_scale), yeetle's default 0.1, 0.1
+        a = cfg.get("aug_scale", 0.1)
+        net = utp.make_net(3, INPUT_SHAPE, False, rm=utp.RandomMatrix(rotation_scale=a, shear_stretch_scale=a))
         if cfg["arch"] == "yeetle_noblur":
             for m in net.modules():
                 if type(m) is fpc.Blur:
@@ -328,7 +338,7 @@ def log_images(writer, net, cfg, A, B, step):
 
 
 def train(arm):
-    cfg = ARMS[arm]
+    cfg = ALL_ARMS[arm]
     import fast_training
     import icon_registration.config
     from torch.utils.tensorboard import SummaryWriter
@@ -395,7 +405,7 @@ def train(arm):
 
 def eval_net(arm, weights):
     """The final trained network, augmentation wrapper stripped (as register.get_model / bench.py)."""
-    cfg = ARMS[arm]
+    cfg = ALL_ARMS[arm]
     net = make_net(cfg, final_step=True)
     net.regis_net.load_state_dict(torch.load(weights, map_location="cpu"), strict=True)
     net.regis_net = inner(net, cfg)
@@ -412,7 +422,7 @@ def evaluate(arm, weights):
     icon_registration.config.device = torch.device("cuda")
     weights = os.path.abspath(weights)
     with open(os.path.join(footsteps.output_dir, "config.json"), "w") as fh:
-        json.dump(dict(ARMS[arm], arm=arm, weights=weights, setting="raw", io_steps=IO_STEPS,
+        json.dump(dict(ALL_ARMS[arm], arm=arm, weights=weights, setting="raw", io_steps=IO_STEPS,
                        gold_atlas_data=GOLD_ATLAS_DATA, patients=PATIENTS), fh, indent=1)
     score(arm, eval_net(arm, weights), register.preprocess, register.preprocess)
 
@@ -515,7 +525,7 @@ def evaluate_anatomix(arm, weights):
     icon_registration.config.device = torch.device("cuda")
     weights = os.path.abspath(weights)
     with open(os.path.join(footsteps.output_dir, "config.json"), "w") as fh:
-        json.dump(dict(ARMS[arm], arm=arm, weights=weights, pack=os.path.abspath(ANATOMIX_EVAL_PACK), conds=ANATOMIX_CONDS), fh, indent=1)
+        json.dump(dict(ALL_ARMS[arm], arm=arm, weights=weights, pack=os.path.abspath(ANATOMIX_EVAL_PACK), conds=ANATOMIX_CONDS), fh, indent=1)
     rows = anatomix_epe(eval_net(arm, weights), torch.load(ANATOMIX_EVAL_PACK, weights_only=False))
     path = os.path.join(footsteps.output_dir, "anatomix_epe.csv")
     with open(path, "w") as fh:
@@ -540,7 +550,7 @@ def summary():
     import footsteps
     import numpy as np
     lines = [f"{'arm':20s} {'mean':>6s} {'median':>6s} {'min':>6s}  eval run (Gold Atlas raw, IO-50, bladder Dice, 17 patients)"]
-    for arm in ["0_ugi_release"] + list(ARMS):
+    for arm in ["0_ugi_release"] + list(ALL_ARMS):
         run = latest_run(f"ablation_{arm}_eval", "gold_atlas_raw_io50.csv")
         if run is None:
             lines.append(f"{arm:20s}   (not evaluated)")
@@ -550,7 +560,7 @@ def summary():
     cols = [(c, sp) for c in ANATOMIX_CONDS for sp in ("trained", "held-out")]
     lines += ["", "anatomix mean EPE (voxels, no IO; zoom_affine_border is the cue-free affine)",
               f"{'arm':20s} " + " ".join(f"{c[:18] + ' ' + sp[:4]:>23s}" for c, sp in cols) + "  eval run"]
-    for arm in ARMS:
+    for arm in ALL_ARMS:
         run = latest_run(f"ablation_{arm}_anatomix", "anatomix_epe.csv")
         if run is None:
             continue
