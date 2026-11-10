@@ -21,6 +21,9 @@ uniGradICON as the two dataset zips allow; arm 8 is yeetle (utp.make_net, public
                        reflected extrapolation the Blur wrapper also does is kept), to isolate the blurring
     10_yeetle_nopad    off the chain: yeetle with augmentify's random affines fitted inside the field of view, so
                        the network never sees border padding (whose streaks give the affine away); compare with 8
+    11_yeetle_cube     off the chain: yeetle with each training pair first put through a random one of the 48
+                       symmetries of the cube (axis permutation and flips, the same for both images, as
+                       uniGradICON's augmentation without its affine noise), then augmentify as usual; compare with 8
 
 Augmentation-scale sweep (AUG_SWEEP, run by run_aug_sweep.sh): yeetle (arm 8) with augmentify's RandomMatrix
 rotation_scale = shear_stretch_scale = s, for s from 0 (identity matrices: the wrapper is a no-op) to 0.125
@@ -85,6 +88,7 @@ ARMS["7_lr"] = dict(ARMS["6_sqlncc"], lr=2e-5)
 ARMS["8_yeetle"] = dict(ARMS["7_lr"], arch="yeetle")
 ARMS["9_yeetle_noblur"] = dict(ARMS["8_yeetle"], arch="yeetle_noblur")
 ARMS["10_yeetle_nopad"] = dict(ARMS["8_yeetle"], aug="augmentify_nopad")
+ARMS["11_yeetle_cube"] = dict(ARMS["8_yeetle"], cube=True)
 AUG_SCALES = [0.0, 0.025, 0.05, 0.075, 0.1, 0.125]
 AUG_SWEEP = {f"aug{a:.3f}": dict(ARMS["8_yeetle"], aug_scale=a) for a in AUG_SCALES}
 ALL_ARMS = {**ARMS, **AUG_SWEEP}
@@ -247,6 +251,18 @@ def ugi_augment(image_A, image_B):
     return out
 
 
+def cube_augment(image_A, image_B):
+    """One of the 48 symmetries of the cube per pair (uniGradICON's shared axis permutation and flips, without
+    its independent affine noise), applied to A and B alike. Exact on a cubic grid: no interpolation, no padding."""
+    out_A, out_B = [], []
+    for a, b in zip(image_A, image_B):  # each C, D, H, W
+        perm = [0] + [1 + k for k in torch.randperm(3).tolist()]
+        flips = [1 + k for k in range(3) if random.random() < 0.5]
+        out_A.append(a.permute(perm).flip(flips))
+        out_B.append(b.permute(perm).flip(flips))
+    return torch.stack(out_A), torch.stack(out_B)
+
+
 # ---------------------------------------------------------------- data
 
 @contextlib.contextmanager
@@ -379,6 +395,9 @@ def train(arm):
             if cfg["aug"] == "ugi":
                 with torch.no_grad():
                     A, B = ugi_augment(A, B)
+            if cfg.get("cube"):
+                with torch.no_grad():
+                    A, B = cube_augment(A, B)
             optimizer.zero_grad()
             loss = ddp(A, B)
             loss.all_loss.mean().backward()
